@@ -39,6 +39,8 @@ export function Sidebar({
 }: SidebarProps) {
   const { respondToConnectionRequest } = useLocation();
   const [isMobile, setIsMobile] = useState(false);
+  // Track if user deliberately closed sidebar to avoid auto-reopening
+  const [userClosedSidebar, setUserClosedSidebar] = useState(false);
   
   const pendingRequests = connectionRequests.filter(req => req.status === 'pending');
 
@@ -54,12 +56,16 @@ export function Sidebar({
     return () => window.removeEventListener('resize', checkIfMobile);
   }, []);
 
-  // Close sidebar after selecting a connection on mobile
-  useEffect(() => {
-    if (isMobile && selectedConnection && isOpen) {
-      onToggle();
-    }
-  }, [selectedConnection, isMobile, isOpen, onToggle]);
+  // Custom toggle handler to track user intent
+  const handleToggle = () => {
+    setUserClosedSidebar(!isOpen);
+    onToggle();
+  };
+
+  const handleSelectConnection = (id: string) => {
+    // Select the connection without automatically closing sidebar
+    onSelectConnection(id);
+  };
 
   const handleAcceptRequest = async (requestId: string) => {
     try {
@@ -83,8 +89,8 @@ export function Sidebar({
     <>
       {/* Mobile toggle button - outside sidebar to always be visible */}
       <button
-        onClick={onToggle}
-        className={`md:hidden fixed top-4 ${isOpen ? 'right-4' : 'left-4'} bg-background rounded-full p-3 shadow-md z-50 transition-all duration-300`}
+        onClick={handleToggle}
+        className={`md:hidden fixed top-4 ${isOpen ? 'right-4' : 'left-4'} bg-background rounded-full p-3 shadow-md z-[1000] transition-all duration-300`}
         aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
       >
         <svg
@@ -116,7 +122,7 @@ export function Sidebar({
       {isMobile && isOpen && (
         <div 
           className="fixed inset-0 bg-black/30 z-40"
-          onClick={onToggle}
+          onClick={handleToggle}
           aria-hidden="true"
         />
       )}
@@ -222,7 +228,7 @@ export function Sidebar({
                   {connections.map((connection) => (
                     <div
                       key={connection.id}
-                      onClick={() => onSelectConnection(connection.id)}
+                      onClick={() => handleSelectConnection(connection.id)}
                       className={`p-3 rounded-lg cursor-pointer transition-all ${
                         selectedConnection === connection.id
                           ? 'bg-primary text-primary-foreground'

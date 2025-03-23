@@ -318,7 +318,11 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
     
     // Remove existing routing control
     if (routingControlRef.current) {
-      mapInstance.removeControl(routingControlRef.current);
+      if (routingControlRef.current.remove) {
+        mapInstance.removeControl(routingControlRef.current);
+      } else if (routingControlRef.current.removeFrom) {
+        routingControlRef.current.removeFrom(mapInstance);
+      }
       routingControlRef.current = null;
     }
     
@@ -333,24 +337,54 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
           selectedConnection.location.longitude
         );
         
-        // Create routing control
-        const routingControl = window.L.Routing.control({
-          waypoints: [userLatLng, connectionLatLng],
-          routeWhileDragging: false,
-          showAlternatives: false,
-          fitSelectedRoutes: true,
-          show: false, // Don't show the instructions by default
-          lineOptions: {
-            styles: [{ color: '#3b82f6', opacity: 0.8, weight: 5 }],
-            extendToWaypoints: true,
-            missingRouteTolerance: 0
-          },
-          router: window.L.Routing.osrmv1({
-            serviceUrl: 'https://router.project-osrm.org/route/v1'
-          })
-        }).addTo(mapInstance);
-        
-        routingControlRef.current = routingControl;
+        try {
+          // Create routing control with improved options for mobile
+          const routingControl = window.L.Routing.control({
+            waypoints: [userLatLng, connectionLatLng],
+            routeWhileDragging: false,
+            showAlternatives: false,
+            fitSelectedRoutes: true,
+            show: false, // Don't show the instructions by default
+            lineOptions: {
+              styles: [{ color: '#3b82f6', opacity: 0.8, weight: 5 }],
+              extendToWaypoints: true,
+              missingRouteTolerance: 0
+            },
+            createMarker: () => null, // Don't create default markers
+            router: window.L.Routing.osrmv1({
+              serviceUrl: 'https://router.project-osrm.org/route/v1',
+              timeout: 5000
+            }),
+            collapsible: true,
+            position: 'topright'
+          }).addTo(mapInstance);
+          
+          // Ensure the route is always on top when zooming or panning
+          routingControl.on('routesfound', function() {
+            if (routingControl._route) {
+              // Bring route line to front
+              routingControl._line.bringToFront();
+            }
+          });
+          
+          // Move the routing control container for better visibility
+          setTimeout(() => {
+            try {
+              if (routingControl._container) {
+                routingControl._container.style.zIndex = "1000";
+                routingControl._container.style.display = "none"; // Hide initially
+              }
+            } catch (e) {
+              console.error("Error adjusting routing control container:", e);
+            }
+          }, 500);
+          
+          routingControlRef.current = routingControl;
+        } catch (error) {
+          console.error("Error creating routing control:", error);
+          // Fallback to simple polyline if routing fails
+          createSimpleRouteLine(mapInstance, currentLocation, selectedConnection.location);
+        }
         
         // Fit bounds with padding for mobile
         mapInstance.fitBounds([
@@ -361,31 +395,43 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
         });
       } else if (!window.L.Routing) {
         // If routing library isn't loaded yet, use a simple line
-        const userLatLng = [currentLocation.latitude, currentLocation.longitude];
-        const connectionLatLng = [
-          selectedConnection.location.latitude, 
-          selectedConnection.location.longitude
-        ];
-        
-        // Create polyline
-        const polyline = L.polyline([userLatLng, connectionLatLng], {
-          color: '#3b82f6',
-          weight: 5,
-          opacity: 0.8
-        }).addTo(mapInstance);
-        
-        routingControlRef.current = polyline;
-        
-        // Fit bounds to include both markers
-        mapInstance.fitBounds([
-          [currentLocation.latitude, currentLocation.longitude],
-          [selectedConnection.location.latitude, selectedConnection.location.longitude]
-        ], { 
-          padding: [50, 50] 
-        });
+        createSimpleRouteLine(mapInstance, currentLocation, selectedConnection.location);
       }
     }
   }, [currentLocation, connections, selectedConnectionId]);
+  
+  // Helper function to create a simple route line
+  const createSimpleRouteLine = (mapInstance, userLocation, connectionLocation) => {
+    const userLatLng = [userLocation.latitude, userLocation.longitude];
+    const connectionLatLng = [
+      connectionLocation.latitude, 
+      connectionLocation.longitude
+    ];
+    
+    // Create polyline with improved styling
+    const polyline = L.polyline([userLatLng, connectionLatLng], {
+      color: '#3b82f6',
+      weight: 5,
+      opacity: 0.8,
+      // Add additional styling to make it more visible
+      dashArray: null,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(mapInstance);
+    
+    // Ensure it stays on top
+    polyline.bringToFront();
+    
+    routingControlRef.current = polyline;
+    
+    // Fit bounds to include both markers
+    mapInstance.fitBounds([
+      [userLocation.latitude, userLocation.longitude],
+      [connectionLocation.latitude, connectionLocation.longitude]
+    ], { 
+      padding: [50, 50] 
+    });
+  }
   
   return (
     <div className="h-full w-full relative">
