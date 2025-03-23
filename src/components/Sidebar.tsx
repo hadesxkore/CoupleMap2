@@ -45,7 +45,9 @@ export function Sidebar({
   const [connectionEditorOpen, setConnectionEditorOpen] = useState(false);
   const [selectedConnectionForEdit, setSelectedConnectionForEdit] = useState<ConnectionWithLocation | null>(null);
   
+  // Filter requests by status
   const pendingRequests = connectionRequests.filter(req => req.status === 'pending');
+  const acceptedRequests = connectionRequests.filter(req => req.status === 'accepted');
 
   // Detect mobile devices
   useEffect(() => {
@@ -96,6 +98,16 @@ export function Sidebar({
       toast.success('Connection request rejected');
     } catch (error: any) {
       toast.error(`Error rejecting request: ${error.message}`);
+    }
+  };
+
+  // Function to get the timestamp in readable format
+  const formatTimestamp = (timestamp: string) => {
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleString();
+    } catch (error) {
+      return 'Unknown time';
     }
   };
 
@@ -203,7 +215,7 @@ export function Sidebar({
         {/* Main sidebar content */}
         <div className="flex-1 overflow-y-auto p-4">
           <Tabs defaultValue="connections">
-            <TabsList className="w-full mb-4 grid grid-cols-2">
+            <TabsList className="w-full mb-4 grid grid-cols-3">
               <TabsTrigger value="connections" className="relative">
                 Connections
                 {connections.length > 0 && (
@@ -213,10 +225,18 @@ export function Sidebar({
                 )}
               </TabsTrigger>
               <TabsTrigger value="requests" className="relative">
-                Requests
+                Pending
                 {pendingRequests.length > 0 && (
                   <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center bg-primary">
                     {pendingRequests.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="accepted" className="relative">
+                Accepted
+                {acceptedRequests.length > 0 && (
+                  <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center bg-green-500">
+                    {acceptedRequests.length}
                   </Badge>
                 )}
               </TabsTrigger>
@@ -276,7 +296,7 @@ export function Sidebar({
                     >
                       <div className="flex items-center space-x-3">
                         <Avatar className="h-10 w-10 border-2 border-white">
-                          <AvatarImage src={`https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`} />
+                          <AvatarImage src={connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`} />
                           <AvatarFallback>
                             {connection.displayName.substring(0, 2).toUpperCase()}
                           </AvatarFallback>
@@ -366,6 +386,9 @@ export function Sidebar({
                           <p className="text-xs text-muted-foreground">
                             {request.fromEmail}
                           </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Requested: {formatTimestamp(request.timestamp)}
+                          </p>
                         </div>
                       </div>
                       <div className="flex space-x-2">
@@ -382,6 +405,59 @@ export function Sidebar({
                         >
                           Accept
                         </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="accepted" className="space-y-4">
+              {acceptedRequests.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground bg-secondary/20 rounded-lg">
+                  <svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    className="h-12 w-12 mx-auto mb-2 text-muted-foreground"
+                  >
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                    <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                  </svg>
+                  <p>No accepted requests</p>
+                  <p className="text-sm mt-1">Accepted connection requests will appear here</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {acceptedRequests.map((request) => (
+                    <div
+                      key={request.id}
+                      className="p-4 border border-border rounded-lg bg-card"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Avatar className="h-10 w-10">
+                          <AvatarFallback>
+                            {request.fromName.substring(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium">
+                            {request.fromName}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {request.fromEmail}
+                          </p>
+                          <div className="flex items-center mt-1">
+                            <div className="h-2 w-2 rounded-full mr-2 bg-green-500"></div>
+                            <p className="text-xs text-muted-foreground">
+                              Accepted: {formatTimestamp(request.timestamp)}
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ))}

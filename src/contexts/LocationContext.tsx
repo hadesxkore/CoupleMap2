@@ -259,7 +259,8 @@ export function LocationProvider({ children }: LocationProviderProps) {
       
       // Update request status
       await updateDoc(requestRef, {
-        status: accept ? 'accepted' : 'rejected'
+        status: accept ? 'accepted' : 'rejected',
+        respondedAt: serverTimestamp() // Add timestamp when responded
       });
       
       // If accepted, add to connections for both users
@@ -293,6 +294,9 @@ export function LocationProvider({ children }: LocationProviderProps) {
           })
         });
       }
+      
+      // Show success notification for the user
+      toast.success(accept ? 'Connection accepted! You can now see each other on the map.' : 'Connection request rejected');
     } catch (error) {
       console.error('Error responding to connection request:', error);
       throw error;
@@ -444,7 +448,7 @@ export function LocationProvider({ children }: LocationProviderProps) {
       }
     });
     
-    // Listen for connection requests
+    // Listen for connection requests - modified to not filter by status in the query
     const requestsRef = collection(db, 'connectionRequests');
     const q = query(requestsRef, where('toId', '==', currentUser.uid));
     
