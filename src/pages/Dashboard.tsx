@@ -27,17 +27,16 @@ export default function Dashboard() {
   const [connectionEmail, setConnectionEmail] = useState('');
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
-  // Use isMobile for responsive design
-  const [isMobile, setIsMobile] = useState(false);
+  // sidebarOpen state for controlling sidebar visibility
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchResults, setSearchResults] = useState<{id: string, email: string, displayName: string}[]>([]);
   const [searchTimeout, setSearchTimeout] = useState<number | null>(null);
 
-  // Check if device is mobile
+  // Check if device is mobile and adjust sidebar
   useEffect(() => {
     const checkIfMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth < 768) {
+      const isMobileDevice = window.innerWidth < 768;
+      if (isMobileDevice) {
         setSidebarOpen(false);
       } else {
         setSidebarOpen(true);
@@ -124,17 +123,6 @@ export default function Dashboard() {
       console.error('Error adding connection:', error);
     } finally {
       setConnectionLoading(false);
-    }
-  };
-
-  // Handle connection request response
-  const handleConnectionResponse = async (requestId: string, accept: boolean) => {
-    try {
-      await respondToConnectionRequest(requestId, accept);
-      // UI update will happen automatically via context listeners
-    } catch (error: any) {
-      toast.error(`Error responding to request: ${error.message}`);
-      console.error('Error responding to request:', error);
     }
   };
 
