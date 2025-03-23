@@ -131,6 +131,9 @@ export function Map({
   const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets');
   const [isMapLoading, setIsMapLoading] = useState(true);
   const [tileError, setTileError] = useState(false);
+  const [messageModalOpen, setMessageModalOpen] = useState(false);
+  const [message, setMessage] = useState('');
+  const [activeMessage, setActiveMessage] = useState<string | null>(null);
   const { currentUser } = useAuth();
   
   // Track tile loading attempts
@@ -464,8 +467,40 @@ export function Map({
         zIndexOffset: 1000
       }).addTo(mapRef.current);
       
+      // Add click event to open message modal
+      marker.on('click', () => {
+        setMessageModalOpen(true);
+      });
+      
       // Add to markers ref
       markersRef.current['currentUser'] = marker;
+    }
+    
+    // Show active message if exists
+    if (activeMessage && markersRef.current['currentUser'] && mapRef.current) {
+      // Create or update popup with message
+      const popup = L.popup({
+        className: 'message-popup',
+        closeButton: true,
+        autoClose: false,
+        closeOnEscapeKey: true,
+        closeOnClick: false,
+        offset: [0, -50]
+      })
+      .setLatLng([latitude, longitude])
+      .setContent(`
+        <div class="message-bubble">
+          <p>${activeMessage}</p>
+        </div>
+      `)
+      .openOn(mapRef.current);
+      
+      // Auto close after 10 seconds
+      setTimeout(() => {
+        if (mapRef.current) {
+          mapRef.current.closePopup(popup);
+        }
+      }, 10000);
     }
     
     // Center map on first location update
@@ -479,7 +514,7 @@ export function Map({
     if (tileError && mapRef.current) {
       createTileLayer(mapRef.current, mapType);
     }
-  }, [currentLocation, currentUser, tileError, mapType]);
+  }, [currentLocation, currentUser, tileError, mapType, activeMessage]);
   
   // Helper function to create a simple route line
   const createRouteLine = (from: L.LatLng, to: L.LatLng, map: L.Map) => {
@@ -682,6 +717,20 @@ export function Map({
     onUpdateLocation();
   };
   
+  // Handle sending a new message
+  const handleSendMessage = () => {
+    if (message.trim()) {
+      setActiveMessage(message.trim());
+      setMessage('');
+      setMessageModalOpen(false);
+      
+      // Automatically clear message after 1 minute
+      setTimeout(() => {
+        setActiveMessage(null);
+      }, 60000);
+    }
+  };
+  
   return (
     <div className="relative w-full h-full">
       {/* Map container */}
@@ -718,6 +767,59 @@ export function Map({
         </div>
       )}
       
+      {/* Message Modal */}
+      {messageModalOpen && (
+        <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-[1001]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="flex justify-between items-center px-6 py-4 border-b">
+              <h2 className="font-bold text-lg">Share a Message</h2>
+              <button 
+                onClick={() => setMessageModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 py-4">
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm text-gray-600 mb-2">
+                    This message will appear above your location on the map and will be visible to your connections.
+                  </p>
+                  <textarea
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="What's on your mind? Share a quick update..."
+                    className="w-full border border-gray-300 rounded-md px-4 py-2 h-32 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    maxLength={200}
+                  />
+                  <div className="text-xs text-right text-gray-500">
+                    {message.length}/200 characters
+                  </div>
+                </div>
+                <div className="flex justify-end space-x-2 pt-2">
+                  <button
+                    onClick={() => setMessageModalOpen(false)}
+                    className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={!message.trim()}
+                    className={`px-4 py-2 rounded-md text-white ${message.trim() ? 'bg-blue-500 hover:bg-blue-600' : 'bg-blue-300 cursor-not-allowed'}`}
+                  >
+                    Share Message
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Refresh location button */}
       <button 
         onClick={handleRefreshLocation}
@@ -737,6 +839,40 @@ export function Map({
           <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c-2.85 0-5.485-.89-7.636-2.404M3 12a9 9 0 0 1 9-9m-9 9c0-2.85.89-5.485 2.404-7.636M12 3h9" />
         </svg>
       </button>
+      
+      {/* Add message styles */}
+      <style jsx global>{`
+        .message-popup .leaflet-popup-content-wrapper {
+          background: #0284c7;
+          color: white;
+          border-radius: 20px;
+          padding: 0;
+          box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+        }
+        
+        .message-popup .leaflet-popup-content {
+          margin: 10px 14px;
+          line-height: 1.4;
+          font-weight: 500;
+        }
+        
+        .message-popup .leaflet-popup-tip {
+          background: #0284c7;
+        }
+        
+        .message-popup .leaflet-popup-close-button {
+          color: rgba(255,255,255,0.8);
+        }
+        
+        .message-popup .leaflet-popup-close-button:hover {
+          color: white;
+        }
+        
+        .message-bubble {
+          max-width: 200px;
+          word-wrap: break-word;
+        }
+      `}</style>
     </div>
   );
 } 

@@ -9,6 +9,9 @@ import { toast } from 'sonner';
 import { useEffect, useState } from 'react';
 import { ProfileEditor } from './ProfileEditor';
 import { ConnectionProfileEditor } from './ConnectionProfileEditor';
+import { cn } from '../lib/utils';
+import { ConnectionEdit } from './ConnectionEdit';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
 
 export interface SidebarProps {
   user: User | null;
@@ -39,11 +42,17 @@ export function Sidebar({
   onStopTracking,
   onLogout
 }: SidebarProps) {
-  const { respondToConnectionRequest } = useLocation();
+  const { respondToConnectionRequest, removeConnection } = useLocation();
   const [isMobile, setIsMobile] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [connectionEditorOpen, setConnectionEditorOpen] = useState(false);
   const [selectedConnectionForEdit, setSelectedConnectionForEdit] = useState<ConnectionWithLocation | null>(null);
+  const [showMobile, setShowMobile] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [showUserProfiles, setShowUserProfiles] = useState(true);
+  const [showPendingRequests, setShowPendingRequests] = useState(true);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [connectionToDelete, setConnectionToDelete] = useState<ConnectionWithLocation | null>(null);
   
   // Filter requests by status
   const pendingRequests = connectionRequests.filter(req => req.status === 'pending');
@@ -154,6 +163,78 @@ export function Sidebar({
       return 'Unknown time';
     }
   };
+
+  // Prepare edit modal
+  const handleEditConnection = (e: React.MouseEvent, connection: ConnectionWithLocation) => {
+    e.stopPropagation(); // Prevent click from selecting the connection
+    setSelectedConnectionForEdit(connection);
+    setEditOpen(true);
+  };
+  
+  // Handle delete confirmation dialog
+  const handleDeleteConnection = (e: React.MouseEvent, connection: ConnectionWithLocation) => {
+    e.stopPropagation(); // Prevent click from selecting the connection
+    setConnectionToDelete(connection);
+    setDeleteConfirmOpen(true);
+  };
+  
+  // Process the actual connection deletion
+  const confirmDeleteConnection = async () => {
+    if (connectionToDelete) {
+      try {
+        await removeConnection(connectionToDelete.id);
+        // If the deleted connection was selected, deselect it
+        if (selectedConnection === connectionToDelete.id) {
+          onSelectConnection('');
+        }
+      } catch (error) {
+        console.error("Error removing connection:", error);
+      }
+    }
+    setDeleteConfirmOpen(false);
+    setSelectedConnectionForEdit(null);
+  };
+
+  // Format date to show time only if today, otherwise show date
+  const formatDate = (timestamp: string) => {
+    const date = new Date(timestamp);
+    const today = new Date();
+    const isToday = date.toDateString() === today.toDateString();
+    
+    if (isToday) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+  };
+  
+  // Compute how long ago a timestamp was
+  const timeAgo = (timestamp: string) => {
+    const now = new Date();
+    const date = new Date(timestamp);
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    
+    if (seconds < 60) return 'just now';
+    
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    
+    return formatDate(timestamp);
+  };
+  
+  // Sort connections by most recent activity
+  const sortedConnections = [...connections].sort((a, b) => {
+    if (!a.location && !b.location) return 0;
+    if (!a.location) return 1;
+    if (!b.location) return -1;
+    return new Date(b.location.timestamp).getTime() - new Date(a.location.timestamp).getTime();
+  });
 
   return (
     <>
@@ -359,29 +440,54 @@ export function Sidebar({
                             </p>
                           </div>
                         </div>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="h-7 w-7 text-primary-foreground/70 hover:text-primary-foreground"
-                          onClick={(e) => handleOpenConnectionEditor(connection, e)}
-                          title="Edit Connection"
-                        >
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="24"
-                            height="24"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className="h-3.5 w-3.5"
+                        <div className="flex space-x-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={(e) => handleEditConnection(e, connection)}
+                            title="Edit connection"
                           >
-                            <path d="M12 20h9"></path>
-                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                          </svg>
-                        </Button>
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                          </Button>
+                          
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={(e) => handleDeleteConnection(e, connection)}
+                            title="Remove connection"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M3 6h18"></path>
+                              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                            </svg>
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -584,6 +690,37 @@ export function Sidebar({
           }}
         />
       )}
+      
+      {/* Connection edit dialog */}
+      {selectedConnectionForEdit && (
+        <ConnectionEdit
+          connection={selectedConnectionForEdit}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+        />
+      )}
+      
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Connection</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove {connectionToDelete?.displayName} from your connections? 
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDeleteConnection}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 } 

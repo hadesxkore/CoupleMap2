@@ -13,7 +13,8 @@ import {
   addDoc,
   arrayUnion,
   Timestamp,
-  serverTimestamp
+  serverTimestamp,
+  deleteDoc
 } from 'firebase/firestore';
 import { toast } from 'sonner';
 
@@ -52,10 +53,12 @@ export interface LocationContextType {
   updateLocation: () => Promise<Location | undefined>;
   startTrackingLocation: () => void;
   stopTrackingLocation: () => void;
-  sendConnectionRequest: (email: string) => Promise<void>;
+  sendConnectionRequest: (emailOrId: string) => Promise<void>;
   respondToConnectionRequest: (requestId: string, accept: boolean) => Promise<void>;
-  searchUsersByEmail: (query: string) => Promise<{id: string, email: string, displayName: string}[]>;
+  searchUsersByEmail: (email: string) => Promise<{id: string, email: string, displayName: string}[]>;
   updateConnectionNickname: (connectionId: string, nickname: string) => Promise<void>;
+  updateConnectionPhoto: (connectionId: string, photoURL: string) => Promise<void>;
+  removeConnection: (connectionId: string) => Promise<void>;
 }
 
 interface LocationProviderProps {
@@ -163,23 +166,23 @@ export function LocationProvider({ children }: LocationProviderProps) {
   };
   
   // Send connection request
-  const sendConnectionRequest = async (email: string) => {
+  const sendConnectionRequest = async (emailOrId: string) => {
     if (!currentUser) {
       throw new Error('You must be logged in to send a connection request');
     }
     
-    if (email.toLowerCase() === currentUser.email?.toLowerCase()) {
+    if (emailOrId.toLowerCase() === currentUser.email?.toLowerCase()) {
       throw new Error('You cannot send a connection request to yourself');
     }
     
     try {
-      // Find user by email
+      // Find user by email or ID
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', email.toLowerCase()));
+      const q = query(usersRef, where('email', '==', emailOrId.toLowerCase()));
       const querySnapshot = await getDocs(q);
       
       if (querySnapshot.empty) {
-        throw new Error('User not found. Make sure the email address is correct.');
+        throw new Error('User not found. Make sure the email address or ID is correct.');
       }
       
       const recipientDoc = querySnapshot.docs[0];
@@ -340,12 +343,12 @@ export function LocationProvider({ children }: LocationProviderProps) {
   };
   
   // Search users by email
-  const searchUsersByEmail = async (query: string): Promise<{id: string, email: string, displayName: string}[]> => {
+  const searchUsersByEmail = async (email: string): Promise<{id: string, email: string, displayName: string}[]> => {
     if (!currentUser) {
       throw new Error('You must be logged in to search users');
     }
     
-    if (query.length < 3) {
+    if (email.length < 3) {
       return [];
     }
     
@@ -362,8 +365,8 @@ export function LocationProvider({ children }: LocationProviderProps) {
         .filter(user => 
           user.id !== currentUser.uid && // Exclude current user
           (
-            user.email?.toLowerCase().includes(query.toLowerCase()) ||
-            user.displayName?.toLowerCase().includes(query.toLowerCase())
+            user.email?.toLowerCase().includes(email.toLowerCase()) ||
+            user.displayName?.toLowerCase().includes(email.toLowerCase())
           )
         )
         .slice(0, 5); // Limit to 5 results
@@ -375,52 +378,66 @@ export function LocationProvider({ children }: LocationProviderProps) {
     }
   };
   
-  // Update a connection's nickname
-  const updateConnectionNickname = async (connectionId: string, nickname: string): Promise<void> => {
+  // Update connection nickname
+  const updateConnectionNickname = async (connectionId: string, nickname: string) => {
     if (!currentUser) {
-      throw new Error('You must be logged in to update a connection');
+      throw new Error('Not authenticated');
     }
     
     try {
-      // Get current user document
-      const userRef = doc(db, 'users', currentUser.uid);
-      const userDoc = await getDoc(userRef);
+      // Get the connection document reference
+      const connectionRef = doc(db, 'connections', connectionId);
       
-      if (!userDoc.exists()) {
-        throw new Error('User data not found');
-      }
-      
-      const userData = userDoc.data();
-      
-      // Find the connection in the user's connections array
-      if (!userData.connections) {
-        throw new Error('No connections found');
-      }
-      
-      const updatedConnections = userData.connections.map((conn: any) => {
-        if (conn.id === connectionId) {
-          return {
-            ...conn,
-            displayName: nickname
-          };
-        }
-        return conn;
-      });
-      
-      // Update user document with modified connections array
-      await updateDoc(userRef, {
-        connections: updatedConnections
+      // Update the connection document with the new nickname
+      await updateDoc(connectionRef, {
+        displayName: nickname
       });
       
       // Update local state
       setConnections(prev => 
         prev.map(conn => 
-          conn.id === connectionId ? { ...conn, displayName: nickname } : conn
+          conn.id === connectionId 
+            ? { ...conn, displayName: nickname } 
+            : conn
         )
       );
       
+      console.log(`Nickname updated for connection ${connectionId}`);
     } catch (error) {
       console.error('Error updating connection nickname:', error);
+      throw error;
+    }
+  };
+  
+  /**
+   * Update connection profile photo
+   */
+  const updateConnectionPhoto = async (connectionId: string, photoURL: string) => {
+    if (!currentUser) {
+      throw new Error('Not authenticated');
+    }
+    
+    try {
+      // Get the connection document reference
+      const connectionRef = doc(db, 'connections', connectionId);
+      
+      // Update the connection document with the new photo URL
+      await updateDoc(connectionRef, {
+        photoURL: photoURL
+      });
+      
+      // Update local state
+      setConnections(prev => 
+        prev.map(conn => 
+          conn.id === connectionId 
+            ? { ...conn, photoURL: photoURL } 
+            : conn
+        )
+      );
+      
+      console.log(`Photo updated for connection ${connectionId}`);
+    } catch (error) {
+      console.error('Error updating connection photo:', error);
       throw error;
     }
   };
@@ -554,6 +571,31 @@ export function LocationProvider({ children }: LocationProviderProps) {
     };
   }, [trackingInterval]);
   
+  /**
+   * Remove connection between users
+   */
+  const removeConnection = async (connectionId: string) => {
+    if (!currentUser) {
+      throw new Error('Not authenticated');
+    }
+    
+    try {
+      // Get the connection document reference
+      const connectionRef = doc(db, 'connections', connectionId);
+      
+      // Delete the connection document
+      await deleteDoc(connectionRef);
+      
+      // Update local state to remove the connection
+      setConnections(prev => prev.filter(conn => conn.id !== connectionId));
+      
+      console.log(`Connection ${connectionId} removed successfully`);
+    } catch (error) {
+      console.error('Error removing connection:', error);
+      throw error;
+    }
+  };
+  
   const value = {
     currentLocation,
     connections,
@@ -565,7 +607,9 @@ export function LocationProvider({ children }: LocationProviderProps) {
     sendConnectionRequest,
     respondToConnectionRequest,
     searchUsersByEmail,
-    updateConnectionNickname
+    updateConnectionNickname,
+    updateConnectionPhoto,
+    removeConnection
   };
   
   return (
