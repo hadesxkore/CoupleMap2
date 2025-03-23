@@ -160,8 +160,6 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
     if (!query || query.length < 3 || !currentUser) return [];
 
     try {
-      const usersRef = collection(db, 'users');
-      
       // This is simplified - in a real app you would use a proper search mechanism
       // Firebase doesn't support startsWith queries directly, this is just an example
       const querySnapshot = await getDocs(collection(db, 'users'));

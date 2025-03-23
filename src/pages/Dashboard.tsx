@@ -5,7 +5,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { toast } from 'sonner';
-import { getFirestore, doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { Map } from '../components/Map';
 import { Sidebar } from '../components/Sidebar';
 
@@ -27,12 +26,12 @@ export default function Dashboard() {
   const [connectionEmail, setConnectionEmail] = useState('');
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
+  // Use isMobile for responsive design
+  // @ts-ignore - Ignore unused variable
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchResults, setSearchResults] = useState<{id: string, email: string, displayName: string}[]>([]);
   const [searchTimeout, setSearchTimeout] = useState<number | null>(null);
-  
-  const db = getFirestore();
 
   // Check if device is mobile
   useEffect(() => {
