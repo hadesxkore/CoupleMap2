@@ -1,5 +1,7 @@
 {
-  "framework": "vite",
+  "env": {
+    "VERCEL": "1"
+  },
   "buildCommand": "npm run build",
   "devCommand": "npm run dev",
   "installCommand": "npm install --legacy-peer-deps",
@@ -7,5 +9,8 @@
   "routes": [
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
+  ],
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/" }
   ]
 } 
