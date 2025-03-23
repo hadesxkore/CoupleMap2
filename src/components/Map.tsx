@@ -127,9 +127,14 @@ export function Map({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<{[key: string]: L.Marker}>({});
   const routingControlRef = useRef<L.Routing.Control | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets');
   const [isMapLoading, setIsMapLoading] = useState(true);
+  const [tileError, setTileError] = useState(false);
   const { currentUser } = useAuth();
+  
+  // Track tile loading attempts
+  const loadingAttemptsRef = useRef(0);
 
   // Combine connections with accepted connection requests
   const allConnections = [...connections];
@@ -149,113 +154,197 @@ export function Map({
     }
   });
   
+  // Create or update tile layer with better error handling
+  const createTileLayer = (map: L.Map, type: 'streets' | 'satellite' = 'streets') => {
+    // Remove existing tile layer if any
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+      tileLayerRef.current = null;
+    }
+    
+    // Reset tile error state
+    setTileError(false);
+    
+    // Set loading state
+    setIsMapLoading(true);
+    
+    let url: string, options: any;
+    
+    // Cartocdn is more reliable for mobile
+    if (type === 'streets') {
+      // Primary source - CartoDB Voyager
+      url = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+      options = {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19,
+        className: 'fast-tiles',
+      };
+    } else {
+      // Satellite view
+      url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+      options = {
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+        maxZoom: 19,
+        className: 'fast-tiles',
+      };
+    }
+    
+    // Add common options
+    options = {
+      ...options,
+      updateWhenIdle: false,
+      updateWhenZooming: false,
+      keepBuffer: 8,
+      tileSize: 256,
+      crossOrigin: true,
+    };
+    
+    // Create and add the tile layer
+    const tileLayer = L.tileLayer(url, options).addTo(map);
+    
+    // Save reference
+    tileLayerRef.current = tileLayer;
+    
+    // Handle successful loading
+    tileLayer.on('load', () => {
+      console.log('Tile layer loaded successfully');
+      setIsMapLoading(false);
+      loadingAttemptsRef.current = 0;
+    });
+    
+    // Handle tile load errors - try OpenStreetMap as fallback if Carto fails
+    tileLayer.on('tileerror', (error) => {
+      console.error('Tile error:', error);
+      loadingAttemptsRef.current += 1;
+      
+      // Only try fallback if we haven't reached max attempts
+      if (loadingAttemptsRef.current < 3 && type === 'streets') {
+        console.log('Trying fallback tile source');
+        
+        // Remove the error tile layer
+        map.removeLayer(tileLayer);
+        
+        // Try OpenStreetMap directly as fallback
+        const fallbackLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          maxZoom: 19,
+          keepBuffer: 8,
+          updateWhenIdle: false,
+          updateWhenZooming: false,
+          className: 'fast-tiles',
+        }).addTo(map);
+        
+        tileLayerRef.current = fallbackLayer;
+        
+        fallbackLayer.on('load', () => {
+          console.log('Fallback tile layer loaded');
+          setIsMapLoading(false);
+        });
+        
+        fallbackLayer.on('tileerror', () => {
+          console.error('Fallback tile source also failed');
+          setTileError(true);
+          setIsMapLoading(false);
+        });
+      } else if (loadingAttemptsRef.current >= 3) {
+        console.error('Max loading attempts reached');
+        setTileError(true);
+        setIsMapLoading(false);
+      }
+    });
+    
+    return tileLayer;
+  };
+  
   // Initialize map
   useEffect(() => {
     if (mapContainerRef.current && !mapRef.current) {
-      // Show loading state
-      setIsMapLoading(true);
-      
-      // Define faster loading tile layer with smaller tile size
-      const fastTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        className: 'fast-tiles',
-        updateWhenIdle: false,      // Update continuously while panning
-        updateWhenZooming: false,   // Update continuously while zooming
-        keepBuffer: 4,              // Keep more tiles in memory
-        maxZoom: 19,
-        crossOrigin: true,
-      });
-      
-      // Create the map with reduced initial zoom level for faster loading
-      const map = L.map(mapContainerRef.current, {
-        center: currentLocation 
-          ? [currentLocation.latitude, currentLocation.longitude] 
-          : DEFAULT_CENTER,
-        zoom: 10, // Lower initial zoom for faster loading
-        maxBounds: PH_BOUNDS,
-        maxBoundsViscosity: 1.0,
-        minZoom: 7,
-        preferCanvas: true, // Use canvas rendering for better performance
-        renderer: L.canvas(),
-        zoomControl: false,
-        fadeAnimation: false,
-        zoomAnimation: window.innerWidth > 768, // Disable zoom animation on mobile
-        markerZoomAnimation: window.innerWidth > 768
-      });
-      
-      // Add the tile layer to the map
-      fastTileLayer.addTo(map);
-      
-      // Mark tiles loaded when ready
-      fastTileLayer.on('load', () => {
-        setIsMapLoading(false);
-      });
-      
-      // Preload surrounding tiles for smoother experience
-      setTimeout(() => {
-        // Force loading tiles in advance
-        const currentZoom = map.getZoom();
-        const currentCenter = map.getCenter();
+      try {
+        // Show loading state
+        setIsMapLoading(true);
         
-        // Zoom out slightly to load more tiles at once
-        map.setZoom(currentZoom - 1);
+        // Create the map with reduced initial zoom level for faster loading
+        const map = L.map(mapContainerRef.current, {
+          center: currentLocation 
+            ? [currentLocation.latitude, currentLocation.longitude] 
+            : DEFAULT_CENTER,
+          zoom: 7, // Lower initial zoom for faster loading
+          maxBounds: PH_BOUNDS,
+          maxBoundsViscosity: 1.0,
+          minZoom: 5,
+          preferCanvas: true, // Use canvas rendering for better performance
+          renderer: L.canvas(),
+          zoomControl: false,
+          fadeAnimation: false,
+          zoomAnimation: window.innerWidth > 768, // Disable zoom animation on mobile
+          markerZoomAnimation: window.innerWidth > 768,
+          attributionControl: true,
+          tap: true,
+        });
         
-        // Then zoom back in after a short delay
-        setTimeout(() => {
-          map.setZoom(currentZoom);
+        // Add the tile layer with better error handling
+        createTileLayer(map, 'streets');
+        
+        // Add map controls in better positions for mobile
+        L.control.zoom({
+          position: 'bottomright'
+        }).addTo(map);
+        
+        // Add satellite/streets toggle
+        const mapTypeControl = L.control({position: 'bottomleft'});
+        mapTypeControl.onAdd = () => {
+          const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar');
+          div.innerHTML = `
+            <button 
+              id="map-type-toggle" 
+              class="bg-white px-3 py-2 rounded-md shadow-md text-sm font-medium"
+              style="display: flex; align-items: center;"
+            >
+              <img 
+                src="/satellite.svg" 
+                alt="Toggle Satellite" 
+                style="width: 16px; height: 16px; margin-right: 6px;"
+              />
+              Satellite
+            </button>
+          `;
           
-          // Zoom to actual location and proper zoom
-          if (currentLocation) {
-            map.setView([currentLocation.latitude, currentLocation.longitude], DEFAULT_ZOOM, {
-              animate: false
+          div.onclick = () => {
+            setMapType(currentType => {
+              const newType = currentType === 'streets' ? 'satellite' : 'streets';
+              updateMapType(map, newType);
+              return newType;
             });
-          }
-        }, 100);
-      }, 300);
-      
-      // Add map controls in better positions for mobile
-      L.control.zoom({
-        position: 'bottomright'
-      }).addTo(map);
-      
-      // Add satellite/streets toggle
-      const mapTypeControl = L.control({position: 'bottomleft'});
-      mapTypeControl.onAdd = () => {
-        const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar');
-        div.innerHTML = `
-          <button 
-            id="map-type-toggle" 
-            class="bg-white px-3 py-2 rounded-md shadow-md text-sm font-medium"
-            style="display: flex; align-items: center;"
-          >
-            <img 
-              src="/satellite.svg" 
-              alt="Toggle Satellite" 
-              style="width: 16px; height: 16px; margin-right: 6px;"
-            />
-            Satellite
-          </button>
-        `;
-        
-        div.onclick = () => {
-          setMapType(currentType => {
-            const newType = currentType === 'streets' ? 'satellite' : 'streets';
-            updateMapType(map, newType);
-            return newType;
-          });
+          };
+          
+          return div;
         };
+        mapTypeControl.addTo(map);
         
-        return div;
-      };
-      mapTypeControl.addTo(map);
-      
-      // Save map instance to ref
-      mapRef.current = map;
-      
-      // Set loading to false after a timeout as fallback
-      setTimeout(() => {
+        // Save map instance to ref
+        mapRef.current = map;
+        
+        // Set loading to false after a timeout as fallback
+        setTimeout(() => {
+          if (isMapLoading) {
+            console.log('Forced loading complete after timeout');
+            setIsMapLoading(false);
+          }
+        }, 5000);
+        
+        // Force a resize event after a delay to help mobile browsers calculate size correctly
+        setTimeout(() => {
+          if (map) {
+            console.log('Triggering map resize event');
+            map.invalidateSize();
+          }
+        }, 1000);
+      } catch (error) {
+        console.error('Error initializing map:', error);
         setIsMapLoading(false);
-      }, 2000);
+        setTileError(true);
+      }
     }
     
     // Add Leaflet routing machine CSS
@@ -292,85 +381,63 @@ export function Map({
           will-change: transform;
           image-rendering: high-quality;
         }
+        
+        /* Fix for tile loading issues on iOS */
+        .leaflet-tile {
+          transform: translate3d(0, 0, 0);
+          backface-visibility: hidden;
+        }
       `;
       document.head.appendChild(style);
     };
     
     addRoutingStyles();
-  }, [currentLocation]);
+    
+    // Clean up on unmount
+    return () => {
+      if (mapRef.current) {
+        console.log('Cleaning up map instance');
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, []);
+  
+  // Make sure map gets recalculated when device orientation changes
+  useEffect(() => {
+    const handleOrientationChange = () => {
+      if (mapRef.current) {
+        console.log('Orientation changed, invalidating map size');
+        setTimeout(() => {
+          mapRef.current?.invalidateSize();
+        }, 200);
+      }
+    };
+    
+    window.addEventListener('orientationchange', handleOrientationChange);
+    
+    return () => {
+      window.removeEventListener('orientationchange', handleOrientationChange);
+    };
+  }, []);
   
   // Update map type (satellite or streets)
   const updateMapType = (map: L.Map, type: 'streets' | 'satellite') => {
+    if (!map) return;
+    
     // Show loading indicator during tile switch
     setIsMapLoading(true);
     
-    // Remove all existing tile layers
-    map.eachLayer((layer) => {
-      if (layer instanceof L.TileLayer) {
-        map.removeLayer(layer);
-      }
-    });
+    // Create new tile layer
+    createTileLayer(map, type);
     
-    // Add the appropriate tile layer
-    let newTileLayer;
-    
-    if (type === 'satellite') {
-      newTileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-        className: 'fast-tiles',
-        updateWhenIdle: false,
-        updateWhenZooming: false,
-        keepBuffer: 4,
-        maxZoom: 19,
-        crossOrigin: true,
-      }).addTo(map);
-      
-      // Update button text
-      const button = document.getElementById('map-type-toggle');
-      if (button) {
-        button.innerHTML = `
-          <img 
-            src="/map.svg" 
-            alt="Toggle Streets" 
-            style="width: 16px; height: 16px; margin-right: 6px;"
-          />
-          Streets
-        `;
-      }
-    } else {
-      newTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        className: 'fast-tiles',
-        updateWhenIdle: false,
-        updateWhenZooming: false,
-        keepBuffer: 4,
-        maxZoom: 19,
-        crossOrigin: true,
-      }).addTo(map);
-      
-      // Update button text
-      const button = document.getElementById('map-type-toggle');
-      if (button) {
-        button.innerHTML = `
-          <img 
-            src="/satellite.svg" 
-            alt="Toggle Satellite" 
-            style="width: 16px; height: 16px; margin-right: 6px;"
-          />
-          Satellite
-        `;
-      }
+    // Update button text
+    const button = document.getElementById('map-type-toggle');
+    if (button) {
+      button.innerHTML = type === 'satellite' 
+        ? `<img src="/map.svg" alt="Toggle Streets" style="width: 16px; height: 16px; margin-right: 6px;"/>Streets`
+        : `<img src="/satellite.svg" alt="Toggle Satellite" style="width: 16px; height: 16px; margin-right: 6px;"/>Satellite`;
     }
-    
-    // Hide loading indicator when tiles are loaded
-    newTileLayer.on('load', () => {
-      setIsMapLoading(false);
-    });
-    
-    // Fallback to hide loading indicator after timeout
-    setTimeout(() => {
-      setIsMapLoading(false);
-    }, 2000);
   };
   
   // Update current user location marker
@@ -407,7 +474,12 @@ export function Map({
         animate: false // Disable animation for faster response
       });
     }
-  }, [currentLocation, currentUser]);
+    
+    // Force reload tiles if there was a tile error
+    if (tileError && mapRef.current) {
+      createTileLayer(mapRef.current, mapType);
+    }
+  }, [currentLocation, currentUser, tileError, mapType]);
   
   // Helper function to create a simple route line
   const createRouteLine = (from: L.LatLng, to: L.LatLng, map: L.Map) => {
@@ -602,6 +674,11 @@ export function Map({
   
   // Utility function to trigger location update
   const handleRefreshLocation = () => {
+    // Also forces a map refresh if tiles aren't loading
+    if (tileError && mapRef.current) {
+      createTileLayer(mapRef.current, mapType);
+    }
+    
     onUpdateLocation();
   };
   
@@ -616,6 +693,27 @@ export function Map({
           <div className="bg-white p-4 rounded-lg shadow-lg flex items-center space-x-3">
             <div className="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full"></div>
             <span>Loading map...</span>
+          </div>
+        </div>
+      )}
+      
+      {/* Tile Error Message */}
+      {tileError && (
+        <div className="absolute inset-0 bg-gray-100 bg-opacity-80 flex items-center justify-center z-[999]">
+          <div className="bg-white p-4 rounded-lg shadow-lg flex flex-col items-center space-y-3 max-w-xs mx-auto text-center">
+            <div className="text-red-500">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <h3 className="font-bold text-lg">Map Loading Error</h3>
+            <p className="text-sm text-gray-600">We couldn't load the map tiles. This might be due to network connectivity issues.</p>
+            <button 
+              onClick={handleRefreshLocation}
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
+            >
+              Refresh Map
+            </button>
           </div>
         </div>
       )}
