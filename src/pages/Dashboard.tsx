@@ -132,7 +132,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex h-full">
+    <div className="flex flex-col md:flex-row h-full relative overflow-hidden">
       {/* Sidebar */}
       <Sidebar
         user={currentUser}

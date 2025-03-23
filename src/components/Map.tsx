@@ -470,7 +470,7 @@ export function Map({
   
   return (
     <div className="relative w-full h-full">
-      <div ref={mapContainerRef} className="w-full h-full" />
+      <div ref={mapContainerRef} className="w-full h-full absolute inset-0" />
       
       {/* Refresh location button */}
       <button 

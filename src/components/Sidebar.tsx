@@ -92,11 +92,20 @@ export function Sidebar({
   // Custom toggle handler
   const handleToggle = () => {
     onToggle();
+    // Close sidebar after selecting a connection on mobile
+    if (isMobile && selectedConnection) {
+      setTimeout(() => onToggle(), 300);
+    }
   };
 
   const handleSelectConnection = (id: string) => {
-    // Select the connection without automatically closing sidebar
+    // Select the connection
     onSelectConnection(id);
+    
+    // Close sidebar automatically on mobile when selecting a connection
+    if (isMobile) {
+      setTimeout(() => onToggle(), 300);
+    }
   };
   
   // Handle opening profile editor
@@ -153,6 +162,7 @@ export function Sidebar({
         onClick={handleToggle}
         className={`md:hidden fixed top-4 ${isOpen ? 'right-4' : 'left-4'} bg-background rounded-full p-3 shadow-md z-[1000] transition-all duration-300`}
         aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
+        style={{ position: 'fixed' }}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
