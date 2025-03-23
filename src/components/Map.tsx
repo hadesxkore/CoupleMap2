@@ -47,72 +47,49 @@ const PH_BOUNDS = L.latLngBounds(
 const DEFAULT_CENTER = [14.5995, 120.9842];
 const DEFAULT_ZOOM = 13;
 
-// Create a custom div marker for user profiles
-const createProfileMarker = (imgSrc, size = 48, selected = false) => {
+// Create a custom icon with the user's profile image
+const createProfileMarker = (profileImageUrl: string, userName: string, isSelected: boolean) => {
+  const iconSize = isSelected ? 50 : 40;
+  
   return L.divIcon({
     className: 'custom-profile-marker',
     html: `
-      <div class="profile-marker ${selected ? 'selected' : ''}" style="width: ${size}px; height: ${size}px;">
-        <img src="${imgSrc || iconUrl}" class="profile-img" />
+      <div style="
+        width: ${iconSize}px;
+        height: ${iconSize}px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 4px solid ${isSelected ? '#0284c7' : 'white'};
+        box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+        transition: all 0.3s ease;
+      ">
+        <img 
+          src="${profileImageUrl}" 
+          alt="${userName}" 
+          style="width: 100%; height: 100%; object-fit: cover;"
+          onerror="this.onerror=null; this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(userName)}';"
+        />
       </div>
+      <div style="
+        background: ${isSelected ? '#0284c7' : 'white'};
+        color: ${isSelected ? 'white' : 'black'};
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: bold;
+        text-align: center;
+        margin-top: 3px;
+        box-shadow: 0 3px 14px rgba(0,0,0,0.2);
+        max-width: 100px;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+      ">${userName}</div>
     `,
-    iconSize: [size, size],
-    iconAnchor: [size/2, size/2],
-    popupAnchor: [0, -size/2],
+    iconSize: [iconSize, iconSize],
+    iconAnchor: [iconSize/2, iconSize + 15],
+    popupAnchor: [0, -iconSize - 15]
   });
-};
-
-// Add styles to document for the custom markers
-const addMarkerStyles = () => {
-  const style = document.createElement('style');
-  style.textContent = `
-    .custom-profile-marker {
-      background: transparent;
-      border: none;
-    }
-    .profile-marker {
-      border-radius: 50%;
-      overflow: hidden;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      border: 3px solid white;
-      transition: all 0.3s ease;
-      background: white;
-    }
-    .profile-marker.selected {
-      transform: scale(1.2);
-      box-shadow: 0 3px 12px rgba(59, 130, 246, 0.5);
-      border: 3px solid #3b82f6;
-      z-index: 1000 !important;
-    }
-    .profile-img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    .leaflet-routing-container {
-      background: white;
-      padding: 10px;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      max-width: 250px;
-      max-height: 300px;
-      overflow-y: auto;
-    }
-    .leaflet-routing-alt h2 {
-      font-size: 14px;
-      margin: 0 0 5px 0;
-    }
-    .leaflet-routing-alt h3 {
-      font-size: 12px;
-      margin: 5px 0;
-    }
-    @media (max-width: 768px) {
-      .leaflet-routing-container {
-        max-width: 200px;
-      }
-    }
-  `;
-  document.head.appendChild(style);
 };
 
 interface Location {
@@ -228,6 +205,40 @@ export function Map({
       // Save map instance to ref
       mapRef.current = map;
     }
+    
+    // Add Leaflet routing machine CSS
+    const addRoutingStyles = () => {
+      const style = document.createElement('style');
+      style.textContent = `
+        .leaflet-routing-container {
+          background: white;
+          padding: 10px;
+          border-radius: 8px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          max-width: 300px;
+          max-height: 300px;
+          overflow-y: auto;
+          font-size: 12px;
+          z-index: 1000;
+        }
+        .leaflet-routing-alt h2 {
+          font-size: 14px;
+          margin: 0 0 5px 0;
+        }
+        .leaflet-routing-alt h3 {
+          font-size: 12px;
+          margin: 5px 0;
+        }
+        @media (max-width: 768px) {
+          .leaflet-routing-container {
+            max-width: 200px;
+          }
+        }
+      `;
+      document.head.appendChild(style);
+    };
+    
+    addRoutingStyles();
   }, [currentLocation]);
   
   // Update map type (satellite or streets)
@@ -295,7 +306,7 @@ export function Map({
       markersRef.current['currentUser'].setLatLng([latitude, longitude]);
     } else {
       // Create a profile marker for the current user
-      const userPhoto = 'https://api.dicebear.com/7.x/thumbs/svg?seed=currentUser';
+      const userPhoto = currentUser?.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${currentUser?.displayName || 'You'}`;
       const marker = L.marker([latitude, longitude], {
         icon: createProfileMarker(userPhoto, 'You', false),
         zIndexOffset: 1000
@@ -309,7 +320,7 @@ export function Map({
     if (!mapRef.current.getCenter().equals([latitude, longitude])) {
       mapRef.current.setView([latitude, longitude], DEFAULT_ZOOM);
     }
-  }, [currentLocation]);
+  }, [currentLocation, currentUser]);
   
   // Helper function to create a simple route line
   const createRouteLine = (from: L.LatLng, to: L.LatLng, map: L.Map) => {
