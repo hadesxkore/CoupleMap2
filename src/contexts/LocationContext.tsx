@@ -385,26 +385,52 @@ export function LocationProvider({ children }: LocationProviderProps) {
     }
     
     try {
-      // Get the connection document reference
-      const connectionRef = doc(db, 'connections', connectionId);
+      // Get the current user's document reference
+      const userRef = doc(db, 'users', currentUser.uid);
       
-      // Update the connection document with the new nickname
-      await updateDoc(connectionRef, {
-        displayName: nickname
-      });
+      // Get the current user's data
+      const userDoc = await getDoc(userRef);
       
-      // Update local state
-      setConnections(prev => 
-        prev.map(conn => 
-          conn.id === connectionId 
-            ? { ...conn, displayName: nickname } 
-            : conn
-        )
-      );
+      if (!userDoc.exists()) {
+        throw new Error('User document not found');
+      }
       
-      console.log(`Nickname updated for connection ${connectionId}`);
+      const userData = userDoc.data();
+      
+      // Find and update the connection in the connections array
+      if (userData.connections && Array.isArray(userData.connections)) {
+        const updatedConnections = userData.connections.map((conn: any) => {
+          if (conn.id === connectionId) {
+            return {
+              ...conn,
+              displayName: nickname
+            };
+          }
+          return conn;
+        });
+        
+        // Update the user document with the modified connections array
+        await updateDoc(userRef, {
+          connections: updatedConnections
+        });
+        
+        // Update local state
+        setConnections(prev => 
+          prev.map(conn => 
+            conn.id === connectionId 
+              ? { ...conn, displayName: nickname } 
+              : conn
+          )
+        );
+        
+        toast.success(`Nickname updated for ${nickname}`);
+        console.log(`Nickname updated for connection ${connectionId}`);
+      } else {
+        throw new Error('No connections found for user');
+      }
     } catch (error) {
       console.error('Error updating connection nickname:', error);
+      toast.error('Failed to update nickname');
       throw error;
     }
   };
@@ -418,24 +444,48 @@ export function LocationProvider({ children }: LocationProviderProps) {
     }
     
     try {
-      // Get the connection document reference
-      const connectionRef = doc(db, 'connections', connectionId);
+      // Get the current user's document reference
+      const userRef = doc(db, 'users', currentUser.uid);
       
-      // Update the connection document with the new photo URL
-      await updateDoc(connectionRef, {
-        photoURL: photoURL
-      });
+      // Get the current user's data
+      const userDoc = await getDoc(userRef);
       
-      // Update local state
-      setConnections(prev => 
-        prev.map(conn => 
-          conn.id === connectionId 
-            ? { ...conn, photoURL: photoURL } 
-            : conn
-        )
-      );
+      if (!userDoc.exists()) {
+        throw new Error('User document not found');
+      }
       
-      console.log(`Photo updated for connection ${connectionId}`);
+      const userData = userDoc.data();
+      
+      // Find and update the connection in the connections array
+      if (userData.connections && Array.isArray(userData.connections)) {
+        const updatedConnections = userData.connections.map((conn: any) => {
+          if (conn.id === connectionId) {
+            return {
+              ...conn,
+              photoURL: photoURL
+            };
+          }
+          return conn;
+        });
+        
+        // Update the user document with the modified connections array
+        await updateDoc(userRef, {
+          connections: updatedConnections
+        });
+        
+        // Update local state
+        setConnections(prev => 
+          prev.map(conn => 
+            conn.id === connectionId 
+              ? { ...conn, photoURL: photoURL } 
+              : conn
+          )
+        );
+        
+        console.log(`Photo updated for connection ${connectionId}`);
+      } else {
+        throw new Error('No connections found for user');
+      }
     } catch (error) {
       console.error('Error updating connection photo:', error);
       throw error;
