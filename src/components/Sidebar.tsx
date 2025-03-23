@@ -241,7 +241,10 @@ export function Sidebar({
       {/* Mobile toggle button - outside sidebar to always be visible */}
       <button
         onClick={handleToggle}
-        className={`md:hidden fixed top-4 ${isOpen ? 'right-4' : 'left-4'} bg-background rounded-full p-3 shadow-md z-[1000] transition-all duration-300`}
+        className={cn(
+          "md:hidden fixed top-4 bg-background rounded-full p-3 shadow-md z-[1000] transition-all duration-300",
+          isOpen ? "right-4" : "left-4"
+        )}
         aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
         style={{ position: 'fixed' }}
       >
@@ -281,11 +284,14 @@ export function Sidebar({
       
       {/* Main sidebar */}
       <div 
-        className={`bg-background border-r border-border flex flex-col h-full transition-all duration-300 z-50 ${
+        className={cn(
+          "bg-background border-r border-border flex flex-col h-full transition-all duration-300 z-50",
           isOpen 
             ? 'w-[85vw] max-w-[320px] translate-x-0' 
-            : 'w-[85vw] max-w-[320px] -translate-x-full'
-        } md:translate-x-0 ${isMobile ? 'fixed top-0 left-0 shadow-xl' : 'relative'}`}
+            : 'w-[85vw] max-w-[320px] -translate-x-full',
+          "md:translate-x-0",
+          isMobile ? 'fixed top-0 left-0 shadow-xl' : 'relative'
+        )}
       >
         {/* User profile header */}
         <div className="p-4 border-b border-border">
@@ -414,11 +420,12 @@ export function Sidebar({
                     <div
                       key={connection.id}
                       onClick={() => handleSelectConnection(connection.id)}
-                      className={`p-3 rounded-lg cursor-pointer transition-all ${
+                      className={cn(
+                        "p-3 rounded-lg cursor-pointer transition-all",
                         selectedConnection === connection.id
                           ? 'bg-primary text-primary-foreground'
                           : 'hover:bg-accent hover:scale-[1.02]'
-                      }`}
+                      )}
                     >
                       <div className="flex items-center space-x-3">
                         <Avatar className="h-10 w-10 border-2 border-white">
@@ -435,7 +442,7 @@ export function Sidebar({
                             <div className={`h-2 w-2 rounded-full mr-2 ${connection.location ? 'bg-green-500' : 'bg-gray-400'}`}></div>
                             <p className="text-xs truncate">
                               {connection.location 
-                                ? `Last updated: ${new Date(connection.location.timestamp).toLocaleTimeString()}` 
+                                ? `Last updated: ${formatDate(connection.location.timestamp)}` 
                                 : 'Offline'}
                             </p>
                           </div>
