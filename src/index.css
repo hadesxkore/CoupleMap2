@@ -90,6 +90,7 @@ html, body, #root {
   padding: 0;
   overflow: hidden;
   position: relative;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Ensure leaflet containers fill their parent */
@@ -97,6 +98,8 @@ html, body, #root {
   width: 100%;
   height: 100%;
   z-index: 0;
+  background-color: #f8f9fa !important; /* Light background color instead of default */
+  will-change: transform;
 }
 
 /* Fix z-index for overlay elements */
@@ -105,14 +108,65 @@ html, body, #root {
   z-index: 900;
 }
 
+/* Optimize tile loading */
+.leaflet-tile {
+  will-change: transform;
+  visibility: visible !important;
+  backface-visibility: hidden;
+}
+
+/* Optimize SVG rendering */
+.leaflet-zoom-animated {
+  will-change: transform;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+
+/* Make sure controls are crisp */
+.leaflet-control {
+  box-shadow: 0 1px 5px rgba(0,0,0,0.2) !important;
+}
+
+/* Optimize for HiDPI screens */
+@media screen and (-webkit-min-device-pixel-ratio: 2),
+       screen and (min-resolution: 192dpi) {
+  .leaflet-tile {
+    image-rendering: crisp-edges;
+  }
+}
+
 /* Fix for mobile Safari height issues */
 @media screen and (max-width: 768px) {
   html, body, #root {
     height: 100vh;
     height: -webkit-fill-available;
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+    top: 0;
+    left: 0;
   }
   
   .leaflet-control {
     margin: 10px !important;
+  }
+  
+  .leaflet-container {
+    touch-action: manipulation;
+    background-color: #f8f9fa !important;
+  }
+  
+  /* Optimize for mobile touch */
+  .leaflet-marker-icon,
+  .leaflet-marker-shadow,
+  .leaflet-control {
+    transition: none !important;
+  }
+  
+  /* Faster markers */
+  .custom-profile-marker {
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    will-change: transform;
   }
 }

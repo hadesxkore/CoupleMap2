@@ -126,6 +126,7 @@ export function Map({
   const markersRef = useRef<{[key: string]: L.Marker}>({});
   const routingControlRef = useRef<L.Routing.Control | null>(null);
   const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets');
+  const [isMapLoading, setIsMapLoading] = useState(true);
   const { currentUser } = useAuth();
 
   // Combine connections with accepted connection requests
@@ -149,24 +150,68 @@ export function Map({
   // Initialize map
   useEffect(() => {
     if (mapContainerRef.current && !mapRef.current) {
-      // Create the map
+      // Show loading state
+      setIsMapLoading(true);
+      
+      // Define faster loading tile layer with smaller tile size
+      const fastTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        className: 'fast-tiles',
+        updateWhenIdle: false,      // Update continuously while panning
+        updateWhenZooming: false,   // Update continuously while zooming
+        keepBuffer: 4,              // Keep more tiles in memory
+        maxZoom: 19,
+        crossOrigin: true,
+      });
+      
+      // Create the map with reduced initial zoom level for faster loading
       const map = L.map(mapContainerRef.current, {
         center: currentLocation 
           ? [currentLocation.latitude, currentLocation.longitude] 
           : DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM,
+        zoom: 10, // Lower initial zoom for faster loading
         maxBounds: PH_BOUNDS,
         maxBoundsViscosity: 1.0,
-        minZoom: 7
+        minZoom: 7,
+        preferCanvas: true, // Use canvas rendering for better performance
+        renderer: L.canvas(),
+        zoomControl: false,
+        fadeAnimation: false,
+        zoomAnimation: window.innerWidth > 768, // Disable zoom animation on mobile
+        markerZoomAnimation: window.innerWidth > 768
       });
       
-      // Add OpenStreetMap tile layer
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      }).addTo(map);
+      // Add the tile layer to the map
+      fastTileLayer.addTo(map);
+      
+      // Mark tiles loaded when ready
+      fastTileLayer.on('load', () => {
+        setIsMapLoading(false);
+      });
+      
+      // Preload surrounding tiles for smoother experience
+      setTimeout(() => {
+        // Force loading tiles in advance
+        const currentZoom = map.getZoom();
+        const currentCenter = map.getCenter();
+        
+        // Zoom out slightly to load more tiles at once
+        map.setZoom(currentZoom - 1);
+        
+        // Then zoom back in after a short delay
+        setTimeout(() => {
+          map.setZoom(currentZoom);
+          
+          // Zoom to actual location and proper zoom
+          if (currentLocation) {
+            map.setView([currentLocation.latitude, currentLocation.longitude], DEFAULT_ZOOM, {
+              animate: false
+            });
+          }
+        }, 100);
+      }, 300);
       
       // Add map controls in better positions for mobile
-      map.zoomControl.remove();
       L.control.zoom({
         position: 'bottomright'
       }).addTo(map);
@@ -204,6 +249,11 @@ export function Map({
       
       // Save map instance to ref
       mapRef.current = map;
+      
+      // Set loading to false after a timeout as fallback
+      setTimeout(() => {
+        setIsMapLoading(false);
+      }, 2000);
     }
     
     // Add Leaflet routing machine CSS
@@ -234,6 +284,12 @@ export function Map({
             max-width: 200px;
           }
         }
+        
+        /* Style for faster tile loading */
+        .fast-tiles {
+          will-change: transform;
+          image-rendering: high-quality;
+        }
       `;
       document.head.appendChild(style);
     };
@@ -243,6 +299,9 @@ export function Map({
   
   // Update map type (satellite or streets)
   const updateMapType = (map: L.Map, type: 'streets' | 'satellite') => {
+    // Show loading indicator during tile switch
+    setIsMapLoading(true);
+    
     // Remove all existing tile layers
     map.eachLayer((layer) => {
       if (layer instanceof L.TileLayer) {
@@ -251,9 +310,17 @@ export function Map({
     });
     
     // Add the appropriate tile layer
+    let newTileLayer;
+    
     if (type === 'satellite') {
-      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+      newTileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+        className: 'fast-tiles',
+        updateWhenIdle: false,
+        updateWhenZooming: false,
+        keepBuffer: 4,
+        maxZoom: 19,
+        crossOrigin: true,
       }).addTo(map);
       
       // Update button text
@@ -269,8 +336,14 @@ export function Map({
         `;
       }
     } else {
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      newTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        className: 'fast-tiles',
+        updateWhenIdle: false,
+        updateWhenZooming: false,
+        keepBuffer: 4,
+        maxZoom: 19,
+        crossOrigin: true,
       }).addTo(map);
       
       // Update button text
@@ -286,6 +359,16 @@ export function Map({
         `;
       }
     }
+    
+    // Hide loading indicator when tiles are loaded
+    newTileLayer.on('load', () => {
+      setIsMapLoading(false);
+    });
+    
+    // Fallback to hide loading indicator after timeout
+    setTimeout(() => {
+      setIsMapLoading(false);
+    }, 2000);
   };
   
   // Update current user location marker
@@ -318,7 +401,9 @@ export function Map({
     
     // Center map on first location update
     if (!mapRef.current.getCenter().equals([latitude, longitude])) {
-      mapRef.current.setView([latitude, longitude], DEFAULT_ZOOM);
+      mapRef.current.setView([latitude, longitude], DEFAULT_ZOOM, {
+        animate: false // Disable animation for faster response
+      });
     }
   }, [currentLocation, currentUser]);
   
@@ -336,7 +421,8 @@ export function Map({
     
     // Fit map bounds to include both points
     map.fitBounds(L.latLngBounds([from, to]), {
-      padding: [50, 50] // Add padding around the bounds
+      padding: [50, 50], // Add padding around the bounds
+      animate: false // Disable animation for faster response
     });
     
     return routeLine;
@@ -408,48 +494,55 @@ export function Map({
         // Check if both points are within Philippines bounds
         if (PH_BOUNDS.contains(from) && PH_BOUNDS.contains(to)) {
           try {
-            // Create a new routing control
-            const routingControl = L.Routing.control({
-              waypoints: [from, to],
-              routeWhileDragging: false,
-              showAlternatives: false,
-              addWaypoints: false,
-              createMarker: () => null, // Don't create default markers
-              lineOptions: {
-                styles: [
-                  {color: '#0284c7', opacity: 0.8, weight: 6},
-                  {color: 'white', opacity: 0.3, weight: 2}
-                ],
-                extendToWaypoints: true,
-                missingRouteTolerance: 0
-              }
-            }).addTo(map);
-            
-            // Style the routing container for better mobile experience
-            setTimeout(() => {
-              const container = document.querySelector('.leaflet-routing-container');
-              if (container) {
-                (container as HTMLElement).style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
-                (container as HTMLElement).style.width = '280px';
-                (container as HTMLElement).style.maxHeight = '300px';
-                (container as HTMLElement).style.overflowY = 'auto';
-                (container as HTMLElement).style.fontSize = '12px';
-                (container as HTMLElement).style.zIndex = '1000';
-              }
-            }, 500);
-            
-            // Store routing control reference
-            routingControlRef.current = routingControl;
-            
-            // If routing fails, create a simple line
-            routingControl.on('routingerror', () => {
-              console.warn('Routing failed, creating simple line instead');
+            // For mobile devices, use simpler routing to improve performance
+            if (window.innerWidth < 768) {
               createRouteLine(from, to, map);
-            });
+            } else {
+              // Create a new routing control for desktop
+              const routingControl = L.Routing.control({
+                waypoints: [from, to],
+                routeWhileDragging: false,
+                showAlternatives: false,
+                addWaypoints: false,
+                fitSelectedRoutes: true,
+                createMarker: () => null, // Don't create default markers
+                lineOptions: {
+                  styles: [
+                    {color: '#0284c7', opacity: 0.8, weight: 6},
+                    {color: 'white', opacity: 0.3, weight: 2}
+                  ],
+                  extendToWaypoints: true,
+                  missingRouteTolerance: 0
+                }
+              }).addTo(map);
+              
+              // Style the routing container for better mobile experience
+              setTimeout(() => {
+                const container = document.querySelector('.leaflet-routing-container');
+                if (container) {
+                  (container as HTMLElement).style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+                  (container as HTMLElement).style.width = '280px';
+                  (container as HTMLElement).style.maxHeight = '300px';
+                  (container as HTMLElement).style.overflowY = 'auto';
+                  (container as HTMLElement).style.fontSize = '12px';
+                  (container as HTMLElement).style.zIndex = '1000';
+                }
+              }, 500);
+              
+              // Store routing control reference
+              routingControlRef.current = routingControl;
+              
+              // If routing fails, create a simple line
+              routingControl.on('routingerror', () => {
+                console.warn('Routing failed, creating simple line instead');
+                createRouteLine(from, to, map);
+              });
+            }
             
             // Fit map bounds to include both points
             map.fitBounds(L.latLngBounds([from, to]), {
-              padding: [50, 50]
+              padding: [50, 50],
+              animate: false // Disable animation for faster response
             });
           } catch (error) {
             console.error('Error creating route:', error);
@@ -470,7 +563,18 @@ export function Map({
   
   return (
     <div className="relative w-full h-full">
+      {/* Map container */}
       <div ref={mapContainerRef} className="w-full h-full absolute inset-0" />
+      
+      {/* Loading indicator */}
+      {isMapLoading && (
+        <div className="absolute inset-0 bg-gray-100 bg-opacity-60 flex items-center justify-center z-[999]">
+          <div className="bg-white p-4 rounded-lg shadow-lg flex items-center space-x-3">
+            <div className="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full"></div>
+            <span>Loading map...</span>
+          </div>
+        </div>
+      )}
       
       {/* Refresh location button */}
       <button 
