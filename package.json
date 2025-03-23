@@ -22,7 +22,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
-    "date-fns": "^4.1.0",
+    "date-fns": "^3.6.0",
     "firebase": "^11.5.0",
     "framer-motion": "^12.5.0",
     "geolocation-utils": "^1.2.6",
