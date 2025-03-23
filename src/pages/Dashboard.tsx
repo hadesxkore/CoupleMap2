@@ -19,8 +19,7 @@ export default function Dashboard() {
     stopTrackingLocation,
     isTracking,
     sendConnectionRequest,
-    searchUsersByEmail,
-    respondToConnectionRequest
+    searchUsersByEmail
   } = useLocation();
   
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
