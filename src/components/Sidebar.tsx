@@ -47,10 +47,7 @@ export function Sidebar({
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [connectionEditorOpen, setConnectionEditorOpen] = useState(false);
   const [selectedConnectionForEdit, setSelectedConnectionForEdit] = useState<ConnectionWithLocation | null>(null);
-  const [showMobile, setShowMobile] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [showUserProfiles, setShowUserProfiles] = useState(true);
-  const [showPendingRequests, setShowPendingRequests] = useState(true);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [connectionToDelete, setConnectionToDelete] = useState<ConnectionWithLocation | null>(null);
   
@@ -120,13 +117,6 @@ export function Sidebar({
   // Handle opening profile editor
   const handleOpenProfileEditor = () => {
     setProfileEditorOpen(true);
-  };
-  
-  // Handle opening connection editor
-  const handleOpenConnectionEditor = (connection: ConnectionWithLocation, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent selecting the connection
-    setSelectedConnectionForEdit(connection);
-    setConnectionEditorOpen(true);
   };
 
   const handleAcceptRequest = async (requestId: string) => {
@@ -207,34 +197,6 @@ export function Sidebar({
       return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     }
   };
-  
-  // Compute how long ago a timestamp was
-  const timeAgo = (timestamp: string) => {
-    const now = new Date();
-    const date = new Date(timestamp);
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-    
-    if (seconds < 60) return 'just now';
-    
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    
-    const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    
-    return formatDate(timestamp);
-  };
-  
-  // Sort connections by most recent activity
-  const sortedConnections = [...connections].sort((a, b) => {
-    if (!a.location && !b.location) return 0;
-    if (!a.location) return 1;
-    if (!b.location) return -1;
-    return new Date(b.location.timestamp).getTime() - new Date(a.location.timestamp).getTime();
-  });
 
   return (
     <>
