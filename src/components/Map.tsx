@@ -518,30 +518,35 @@ export function Map({
         // Check if both points are within Philippines bounds
         if (PH_BOUNDS.contains(from) && PH_BOUNDS.contains(to)) {
           try {
-            // For mobile devices, use simpler routing to improve performance
+            // Always use road routing for all devices (mobile and desktop)
+            const routingControl = L.Routing.control({
+              waypoints: [from, to],
+              routeWhileDragging: false,
+              showAlternatives: false,
+              addWaypoints: false,
+              fitSelectedRoutes: true,
+              createMarker: () => null, // Don't create default markers
+              lineOptions: {
+                styles: [
+                  {color: '#0284c7', opacity: 0.8, weight: 6},
+                  {color: 'white', opacity: 0.3, weight: 2}
+                ],
+                extendToWaypoints: true,
+                missingRouteTolerance: 0
+              }
+            }).addTo(map);
+            
+            // For mobile, make the routing container smaller or hidden
             if (window.innerWidth < 768) {
-              const { routeLine, decorator } = createRouteLine(from, to, map);
-              manualRoutes.push({ line: routeLine, decorator });
-            } else {
-              // Create a new routing control for desktop
-              const routingControl = L.Routing.control({
-                waypoints: [from, to],
-                routeWhileDragging: false,
-                showAlternatives: false,
-                addWaypoints: false,
-                fitSelectedRoutes: true,
-                createMarker: () => null, // Don't create default markers
-                lineOptions: {
-                  styles: [
-                    {color: '#0284c7', opacity: 0.8, weight: 6},
-                    {color: 'white', opacity: 0.3, weight: 2}
-                  ],
-                  extendToWaypoints: true,
-                  missingRouteTolerance: 0
+              setTimeout(() => {
+                const container = document.querySelector('.leaflet-routing-container');
+                if (container) {
+                  // Hide instructions but keep the routing line
+                  (container as HTMLElement).style.display = 'none';
                 }
-              }).addTo(map);
-              
-              // Style the routing container for better mobile experience
+              }, 100);
+            } else {
+              // Style the routing container for desktop experience
               setTimeout(() => {
                 const container = document.querySelector('.leaflet-routing-container');
                 if (container) {
@@ -553,17 +558,17 @@ export function Map({
                   (container as HTMLElement).style.zIndex = '1000';
                 }
               }, 500);
-              
-              // Store routing control reference
-              routingControlRef.current = routingControl;
-              
-              // If routing fails, create a simple line
-              routingControl.on('routingerror', () => {
-                console.warn('Routing failed, creating simple line instead');
-                const { routeLine, decorator } = createRouteLine(from, to, map);
-                manualRoutes.push({ line: routeLine, decorator });
-              });
             }
+            
+            // Store routing control reference
+            routingControlRef.current = routingControl;
+            
+            // If routing fails, create a simple line as fallback
+            routingControl.on('routingerror', () => {
+              console.warn('Routing failed, creating simple line instead');
+              const { routeLine, decorator } = createRouteLine(from, to, map);
+              manualRoutes.push({ line: routeLine, decorator });
+            });
             
             // Fit map bounds to include both points
             map.fitBounds(L.latLngBounds([from, to]), {
