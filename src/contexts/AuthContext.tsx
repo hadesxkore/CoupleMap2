@@ -1,94 +1,89 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { 
-  getAuth, 
+  Auth, 
+  User, 
   createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signOut, 
-  GoogleAuthProvider, 
+  signInWithEmailAndPassword,
   signInWithPopup,
-  User,
-  updateProfile
+  GoogleAuthProvider,
+  signOut,
+  updateProfile,
+  sendPasswordResetEmail,
+  onAuthStateChanged
 } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../services/firebase';
+import { collection, doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { toast } from 'sonner';
 
-interface AuthContextType {
-  currentUser: User | null;
-  loading: boolean;
-  signUp: (email: string, password: string, displayName: string) => Promise<User | null>;
-  login: (email: string, password: string) => Promise<User | null>;
-  loginWithGoogle: () => Promise<User | null>;
-  logout: () => Promise<void>;
-  isProfileComplete: boolean;
+interface AuthProviderProps {
+  children: React.ReactNode;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+interface UserProfile {
+  displayName?: string | null;
+  photoURL?: string | null;
+}
+
+export interface AuthContextType {
+  currentUser: User | null;
+  isAuthenticated: boolean;
+  loading: boolean;
+  signUp: (email: string, password: string, name: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
+  logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
+  updateUserProfile: (profile: UserProfile) => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 }
 
-interface AuthProviderProps {
-  children: ReactNode;
-}
-
 export function AuthProvider({ children }: AuthProviderProps) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isProfileComplete, setIsProfileComplete] = useState(false);
-  const auth = getAuth();
-  const db = getFirestore();
 
-  useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        // Check if user profile is complete
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        setIsProfileComplete(userDoc.exists());
-      }
-      setLoading(false);
-    });
-
-    return unsubscribe;
-  }, [auth, db]);
-
-  async function signUp(email: string, password: string, displayName: string) {
+  async function signUp(email: string, password: string, name: string) {
     try {
-      const result = await createUserWithEmailAndPassword(auth, email, password);
+      // Create user with email and password
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
       
-      // Update profile with display name
-      if (result.user) {
-        await updateProfile(result.user, { displayName });
-        
-        // Create user document in Firestore
-        await setDoc(doc(db, 'users', result.user.uid), {
-          email,
-          displayName,
-          createdAt: new Date().toISOString(),
-          location: null,
-          connections: []
-        });
-      }
+      // Update user profile with name
+      await updateProfile(user, {
+        displayName: name
+      });
       
-      return result.user;
+      // Create user profile in Firestore
+      await setDoc(doc(db, 'users', user.uid), {
+        email: user.email,
+        displayName: name,
+        createdAt: Timestamp.now(),
+        connections: [],
+        // Initialize empty photoURL field to be updated later
+        photoURL: user.photoURL
+      });
+      
+      return;
     } catch (error: any) {
       toast.error(error.message);
-      return null;
+      throw error;
     }
   }
 
   async function login(email: string, password: string) {
     try {
-      const result = await signInWithEmailAndPassword(auth, email, password);
-      return result.user;
+      await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) {
       toast.error(error.message);
-      return null;
+      throw error;
     }
   }
 
@@ -96,25 +91,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
+      const user = result.user;
       
-      // Check if this is a new user
-      const userDoc = await getDoc(doc(db, 'users', result.user.uid));
+      // Check if user document exists in Firestore
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
       
+      // If user document doesn't exist, create it
       if (!userDoc.exists()) {
-        // Create user document for new Google sign-ins
-        await setDoc(doc(db, 'users', result.user.uid), {
-          email: result.user.email,
-          displayName: result.user.displayName,
-          createdAt: new Date().toISOString(),
-          location: null,
+        await setDoc(doc(db, 'users', user.uid), {
+          email: user.email,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          createdAt: Timestamp.now(),
           connections: []
         });
       }
-      
-      return result.user;
     } catch (error: any) {
       toast.error(error.message);
-      return null;
+      throw error;
     }
   }
 
@@ -123,18 +117,76 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await signOut(auth);
     } catch (error: any) {
       toast.error(error.message);
+      throw error;
     }
   }
 
+  async function resetPassword(email: string) {
+    try {
+      await sendPasswordResetEmail(auth, email);
+    } catch (error: any) {
+      toast.error(error.message);
+      throw error;
+    }
+  }
+  
+  // New function to update user profile
+  async function updateUserProfile(profile: UserProfile) {
+    try {
+      if (!currentUser) {
+        throw new Error('No user logged in');
+      }
+      
+      // Update profile in Firebase Auth
+      await updateProfile(currentUser, profile);
+      
+      // Update profile in Firestore
+      await setDoc(doc(db, 'users', currentUser.uid), 
+        { 
+          displayName: profile.displayName, 
+          photoURL: profile.photoURL 
+        }, 
+        { merge: true }
+      );
+      
+      // Update local state to reflect changes
+      setCurrentUser(prevUser => {
+        if (prevUser) {
+          return { ...prevUser, ...profile };
+        }
+        return prevUser;
+      });
+      
+    } catch (error: any) {
+      toast.error(error.message);
+      throw error;
+    }
+  }
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      setLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);
+
   const value = {
     currentUser,
+    isAuthenticated: !!currentUser,
     loading,
     signUp,
     login,
     loginWithGoogle,
     logout,
-    isProfileComplete,
+    resetPassword,
+    updateUserProfile
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {!loading && children}
+    </AuthContext.Provider>
+  );
 } 

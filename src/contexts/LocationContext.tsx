@@ -1,35 +1,51 @@
-import { createContext, useContext, useState, useEffect } from 'react';
-import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
+import { db } from '../services/firebase';
+import { 
+  doc, 
+  collection, 
+  updateDoc, 
+  onSnapshot, 
+  query, 
+  where, 
+  getDoc,
+  getDocs,
+  addDoc,
+  arrayUnion,
+  Timestamp,
+  setDoc,
+  serverTimestamp
+} from 'firebase/firestore';
+import { toast } from 'sonner';
 
-// Define the shape of location data
-export interface Location {
+// Define interfaces for the context
+interface Location {
   latitude: number;
   longitude: number;
   timestamp: string;
   accuracy?: number;
 }
 
-// Define what a connection with location looks like
 export interface ConnectionWithLocation {
   id: string;
-  email: string;
+  userId: string;
   displayName: string;
+  email: string;
+  photoURL?: string | null;
   location: Location | null;
-  status: 'pending' | 'accepted' | 'rejected';
 }
 
-// Define what a connection request looks like
 export interface ConnectionRequest {
   id: string;
-  fromEmail: string;
+  fromId: string;
   fromName: string;
+  fromEmail: string;
+  toId: string;
   status: 'pending' | 'accepted' | 'rejected';
   timestamp: string;
 }
 
-// Create the context with default values
-interface LocationContextType {
+export interface LocationContextType {
   currentLocation: Location | null;
   connections: ConnectionWithLocation[];
   connectionRequests: ConnectionRequest[];
@@ -37,339 +53,442 @@ interface LocationContextType {
   updateLocation: () => Promise<Location | undefined>;
   startTrackingLocation: () => void;
   stopTrackingLocation: () => void;
-  sendConnectionRequest: (email: string) => Promise<boolean>;
-  respondToConnectionRequest: (requestId: string, accept: boolean) => Promise<boolean>;
+  sendConnectionRequest: (email: string) => Promise<void>;
+  respondToConnectionRequest: (requestId: string, accept: boolean) => Promise<void>;
   searchUsersByEmail: (query: string) => Promise<{id: string, email: string, displayName: string}[]>;
+  updateConnectionNickname: (connectionId: string, nickname: string) => Promise<void>;
 }
 
-// Create the context with default values
-const LocationContext = createContext<LocationContextType>({
-  currentLocation: null,
-  connections: [],
-  connectionRequests: [],
-  isTracking: false,
-  updateLocation: async () => undefined,
-  startTrackingLocation: () => {},
-  stopTrackingLocation: () => {},
-  sendConnectionRequest: async () => false,
-  respondToConnectionRequest: async () => false,
-  searchUsersByEmail: async () => [],
-});
+interface LocationProviderProps {
+  children: React.ReactNode;
+}
 
-// Provider component that wraps the app and provides the context value
-export function LocationProvider({ children }: { children: React.ReactNode }) {
+// Create context
+const LocationContext = createContext<LocationContextType | null>(null);
+
+// Hook to use the context
+export function useLocation() {
+  const context = useContext(LocationContext);
+  if (!context) {
+    throw new Error('useLocation must be used within a LocationProvider');
+  }
+  return context;
+}
+
+// Provider component
+export function LocationProvider({ children }: LocationProviderProps) {
+  const { currentUser } = useAuth();
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [connections, setConnections] = useState<ConnectionWithLocation[]>([]);
   const [connectionRequests, setConnectionRequests] = useState<ConnectionRequest[]>([]);
   const [isTracking, setIsTracking] = useState(false);
-  const [trackingId, setTrackingId] = useState<number | null>(null);
-  const { currentUser } = useAuth();
-  const db = getFirestore();
-
-  // Function to get the current location using the Geolocation API
+  const [trackingInterval, setTrackingInterval] = useState<NodeJS.Timeout | null>(null);
+  
+  // Get current location
   const updateLocation = async (): Promise<Location | undefined> => {
     if (!navigator.geolocation) {
-      console.error('Geolocation is not supported by your browser');
+      toast.error('Geolocation is not supported by your browser');
       return;
     }
-
+    
     try {
-      // Clear the cached position data to force a fresh location
-      // For mobile browsers, this forces the device to get a fresh GPS reading
-      if ('clearWatch' in navigator.geolocation) {
-        const tempWatchId = navigator.geolocation.watchPosition(() => {});
-        navigator.geolocation.clearWatch(tempWatchId);
-      }
-
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          resolve, 
-          reject, 
-          {
-            enableHighAccuracy: true,
-            timeout: 15000,
-            maximumAge: 0 // Force fresh location
-          }
-        );
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+        });
       });
-
+      
       const { latitude, longitude, accuracy } = position.coords;
-      const timestamp = new Date().toISOString();
       
-      console.log('Location updated:', { 
-        latitude, 
-        longitude, 
-        accuracy,
-        coords: position.coords
-      });
-      
+      // Format location data
       const locationData = {
         latitude,
         longitude,
-        accuracy,
-        timestamp
+        timestamp: new Date().toISOString(),
+        accuracy
       };
-
+      
       // Update state
       setCurrentLocation(locationData);
-
+      
       // If user is logged in, update their location in Firestore
       if (currentUser) {
-        const userRef = doc(db, 'users', currentUser.uid);
-        await updateDoc(userRef, {
-          location: locationData
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        await updateDoc(userDocRef, {
+          location: {
+            latitude,
+            longitude,
+            timestamp: serverTimestamp(),
+            accuracy
+          }
         });
       }
-
+      
       return locationData;
-    } catch (error) {
-      console.error('Error getting location:', error);
+    } catch (error: any) {
+      if (error.code === 1) { // Permission denied
+        toast.error('Location permission denied. Please enable location services.');
+      } else {
+        toast.error(`Error getting location: ${error.message}`);
+        console.error('Error getting location:', error);
+      }
     }
   };
-
-  // Function to start continuous location tracking
+  
+  // Start tracking location at intervals
   const startTrackingLocation = () => {
-    if (!navigator.geolocation) {
-      console.error('Geolocation is not supported by your browser');
-      return;
-    }
-
-    // Stop any existing tracking
-    stopTrackingLocation();
-
-    // Start a new tracking session
-    const id = window.setInterval(updateLocation, 60000); // Update every minute
-    setTrackingId(id);
-    setIsTracking(true);
-
-    // Get initial location immediately
+    if (isTracking) return;
+    
+    // Update location immediately
     updateLocation();
+    
+    // Set up interval for continuous updates
+    const interval = setInterval(updateLocation, 60000); // Update every minute
+    setTrackingInterval(interval);
+    setIsTracking(true);
+    
+    toast.success('Location tracking started');
   };
-
-  // Function to stop location tracking
+  
+  // Stop tracking location
   const stopTrackingLocation = () => {
-    if (trackingId !== null) {
-      clearInterval(trackingId);
-      setTrackingId(null);
-      setIsTracking(false);
+    if (trackingInterval) {
+      clearInterval(trackingInterval);
+      setTrackingInterval(null);
     }
+    
+    setIsTracking(false);
+    toast.success('Location tracking stopped');
   };
-
-  // Function to search for users by email prefix
-  const searchUsersByEmail = async (query: string): Promise<{id: string, email: string, displayName: string}[]> => {
-    if (!query || query.length < 3 || !currentUser) return [];
-
-    try {
-      // This is simplified - in a real app you would use a proper search mechanism
-      // Firebase doesn't support startsWith queries directly, this is just an example
-      const querySnapshot = await getDocs(collection(db, 'users'));
-      
-      const results: {id: string, email: string, displayName: string}[] = [];
-      
-      querySnapshot.forEach((doc) => {
-        const userData = doc.data() as { 
-          email?: string;
-          displayName?: string;
-        };
-        // Only include users whose email starts with the query and is not the current user
-        if (userData.email && 
-            userData.email.toLowerCase().includes(query.toLowerCase()) && 
-            doc.id !== currentUser.uid) {
-          results.push({
-            id: doc.id,
-            email: userData.email,
-            displayName: userData.displayName || userData.email
-          });
-        }
-      });
-      
-      return results;
-    } catch (error) {
-      console.error('Error searching for users:', error);
-      return [];
+  
+  // Send connection request
+  const sendConnectionRequest = async (email: string) => {
+    if (!currentUser) {
+      throw new Error('You must be logged in to send a connection request');
     }
-  };
-
-  // Function to send a connection request
-  const sendConnectionRequest = async (email: string): Promise<boolean> => {
-    if (!currentUser) return false;
-
+    
+    if (email.toLowerCase() === currentUser.email?.toLowerCase()) {
+      throw new Error('You cannot send a connection request to yourself');
+    }
+    
     try {
       // Find user by email
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', email));
+      const q = query(usersRef, where('email', '==', email.toLowerCase()));
       const querySnapshot = await getDocs(q);
       
       if (querySnapshot.empty) {
-        throw new Error('User not found');
+        throw new Error('User not found. Make sure the email address is correct.');
       }
       
-      const targetUser = querySnapshot.docs[0];
-      const targetUserId = targetUser.id;
+      const recipientDoc = querySnapshot.docs[0];
+      const recipientId = recipientDoc.id;
       
-      if (targetUserId === currentUser.uid) {
-        throw new Error('You cannot connect with yourself');
-      }
+      // Check if a connection request already exists
+      const requestsRef = collection(db, 'connectionRequests');
+      const existingRequestQuery = query(
+        requestsRef, 
+        where('fromId', '==', currentUser.uid),
+        where('toId', '==', recipientId)
+      );
       
-      // Check if a request already exists
-      const requestsRef = collection(db, 'users', targetUserId, 'connectionRequests');
-      const existingRequestQuery = query(requestsRef, where('fromId', '==', currentUser.uid));
       const existingRequests = await getDocs(existingRequestQuery);
       
       if (!existingRequests.empty) {
-        throw new Error('Connection request already sent');
+        const existingRequest = existingRequests.docs[0].data();
+        if (existingRequest.status === 'pending') {
+          throw new Error('You already have a pending request to this user');
+        } else if (existingRequest.status === 'accepted') {
+          throw new Error('You are already connected with this user');
+        }
       }
       
-      // Get current user data for the request
-      const currentUserDoc = await getDoc(doc(db, 'users', currentUser.uid));
-      const currentUserData = currentUserDoc.data();
+      // Check if recipient already sent a request
+      const reciprocalRequestQuery = query(
+        requestsRef,
+        where('fromId', '==', recipientId),
+        where('toId', '==', currentUser.uid)
+      );
       
-      if (!currentUserData) {
-        throw new Error('Your user profile is not complete');
+      const reciprocalRequests = await getDocs(reciprocalRequestQuery);
+      
+      if (!reciprocalRequests.empty) {
+        const reciprocalRequest = reciprocalRequests.docs[0].data();
+        if (reciprocalRequest.status === 'pending') {
+          throw new Error('This user has already sent you a connection request. Check your requests tab.');
+        } else if (reciprocalRequest.status === 'accepted') {
+          throw new Error('You are already connected with this user');
+        }
       }
       
-      // Create the connection request
-      const requestRef = doc(collection(db, 'users', targetUserId, 'connectionRequests'));
-      await setDoc(requestRef, {
-        id: requestRef.id,
+      // Create connection request
+      await addDoc(requestsRef, {
         fromId: currentUser.uid,
-        fromEmail: currentUserData.email,
-        fromName: currentUserData.displayName || currentUserData.email,
+        fromName: currentUser.displayName || 'Anonymous',
+        fromEmail: currentUser.email,
+        toId: recipientId,
         status: 'pending',
-        timestamp: new Date().toISOString()
+        timestamp: Timestamp.now()
       });
-      
-      return true;
     } catch (error) {
       console.error('Error sending connection request:', error);
       throw error;
     }
   };
-
-  // Function to respond to a connection request
-  const respondToConnectionRequest = async (requestId: string, accept: boolean): Promise<boolean> => {
-    if (!currentUser) return false;
-
+  
+  // Respond to connection request
+  const respondToConnectionRequest = async (requestId: string, accept: boolean) => {
+    if (!currentUser) {
+      throw new Error('You must be logged in to respond to a connection request');
+    }
+    
     try {
-      // Get the request
-      const requestRef = doc(db, 'users', currentUser.uid, 'connectionRequests', requestId);
-      const requestSnap = await getDoc(requestRef);
+      const requestRef = doc(db, 'connectionRequests', requestId);
+      const requestDoc = await getDoc(requestRef);
       
-      if (!requestSnap.exists()) {
-        throw new Error('Request not found');
+      if (!requestDoc.exists()) {
+        throw new Error('Connection request not found');
       }
       
-      const requestData = requestSnap.data();
+      const requestData = requestDoc.data();
       
-      // Update the request status
+      if (requestData.toId !== currentUser.uid) {
+        throw new Error('You are not authorized to respond to this request');
+      }
+      
+      // Update request status
       await updateDoc(requestRef, {
         status: accept ? 'accepted' : 'rejected'
       });
       
+      // If accepted, add to connections for both users
       if (accept) {
-        // Add to current user's connections
-        const currentUserConnectionsRef = doc(db, 'users', currentUser.uid);
-        const currentUserDoc = await getDoc(currentUserConnectionsRef);
-        const currentUserConnections = currentUserDoc.data()?.connections || [];
+        const fromUserRef = doc(db, 'users', requestData.fromId);
+        const toUserRef = doc(db, 'users', currentUser.uid);
         
-        // Only add if not already connected
-        if (!currentUserConnections.includes(requestData.fromId)) {
-          await updateDoc(currentUserConnectionsRef, {
-            connections: [...currentUserConnections, requestData.fromId]
-          });
+        // Get user data
+        const fromUserDoc = await getDoc(fromUserRef);
+        const toUserDoc = await getDoc(toUserRef);
+        
+        if (!fromUserDoc.exists() || !toUserDoc.exists()) {
+          throw new Error('User data not found');
         }
         
-        // Add to requester's connections
-        const requesterConnectionsRef = doc(db, 'users', requestData.fromId);
-        const requesterDoc = await getDoc(requesterConnectionsRef);
-        const requesterConnections = requesterDoc.data()?.connections || [];
+        const fromUserData = fromUserDoc.data();
+        const toUserData = toUserDoc.data();
         
-        // Only add if not already connected
-        if (!requesterConnections.includes(currentUser.uid)) {
-          await updateDoc(requesterConnectionsRef, {
-            connections: [...requesterConnections, currentUser.uid]
-          });
-        }
+        // Add connection to sender's connections
+        await updateDoc(fromUserRef, {
+          connections: arrayUnion({
+            id: currentUser.uid,
+            displayName: currentUser.displayName || 'Anonymous',
+            email: currentUser.email
+          })
+        });
+        
+        // Add connection to recipient's connections
+        await updateDoc(toUserRef, {
+          connections: arrayUnion({
+            id: requestData.fromId,
+            displayName: requestData.fromName,
+            email: requestData.fromEmail
+          })
+        });
       }
-      
-      return true;
     } catch (error) {
       console.error('Error responding to connection request:', error);
       throw error;
     }
   };
-
-  // Effect to listen for user's connections when user changes
+  
+  // Search users by email
+  const searchUsersByEmail = async (query: string): Promise<{id: string, email: string, displayName: string}[]> => {
+    if (!currentUser) {
+      throw new Error('You must be logged in to search users');
+    }
+    
+    if (query.length < 3) {
+      return [];
+    }
+    
+    try {
+      // Search for users with email or display name containing query
+      const usersRef = collection(db, 'users');
+      const querySnapshot = await getDocs(usersRef);
+      
+      const results = querySnapshot.docs
+        .map(doc => ({ 
+          id: doc.id, 
+          ...doc.data() as { email: string, displayName: string }
+        }))
+        .filter(user => 
+          user.id !== currentUser.uid && // Exclude current user
+          (
+            user.email?.toLowerCase().includes(query.toLowerCase()) ||
+            user.displayName?.toLowerCase().includes(query.toLowerCase())
+          )
+        )
+        .slice(0, 5); // Limit to 5 results
+      
+      return results;
+    } catch (error) {
+      console.error('Error searching users:', error);
+      throw error;
+    }
+  };
+  
+  // Update a connection's nickname
+  const updateConnectionNickname = async (connectionId: string, nickname: string): Promise<void> => {
+    if (!currentUser) {
+      throw new Error('You must be logged in to update a connection');
+    }
+    
+    try {
+      // Get current user document
+      const userRef = doc(db, 'users', currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) {
+        throw new Error('User data not found');
+      }
+      
+      const userData = userDoc.data();
+      
+      // Find the connection in the user's connections array
+      if (!userData.connections) {
+        throw new Error('No connections found');
+      }
+      
+      const updatedConnections = userData.connections.map((conn: any) => {
+        if (conn.id === connectionId) {
+          return {
+            ...conn,
+            displayName: nickname
+          };
+        }
+        return conn;
+      });
+      
+      // Update user document with modified connections array
+      await updateDoc(userRef, {
+        connections: updatedConnections
+      });
+      
+      // Update local state
+      setConnections(prev => 
+        prev.map(conn => 
+          conn.id === connectionId ? { ...conn, displayName: nickname } : conn
+        )
+      );
+      
+    } catch (error) {
+      console.error('Error updating connection nickname:', error);
+      throw error;
+    }
+  };
+  
+  // Listen for changes in the current user's data
   useEffect(() => {
     if (!currentUser) {
       setConnections([]);
       setConnectionRequests([]);
+      setCurrentLocation(null);
       return;
     }
-
-    // Listen for connection requests
-    const requestsUnsubscribe = onSnapshot(
-      collection(db, 'users', currentUser.uid, 'connectionRequests'),
-      (snapshot) => {
-        const requests: ConnectionRequest[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          requests.push({
-            id: doc.id,
-            fromEmail: data.fromEmail,
-            fromName: data.fromName,
-            status: data.status,
-            timestamp: data.timestamp
-          });
-        });
-        setConnectionRequests(requests);
-      },
-      (error) => {
-        console.error('Error fetching connection requests:', error);
-      }
-    );
-
-    // Get current user's connections
+    
     const userRef = doc(db, 'users', currentUser.uid);
     
-    const userUnsubscribe = onSnapshot(userRef, async (userDoc) => {
-      const userData = userDoc.data();
-      if (!userData) return;
-      
-      const userConnections = userData.connections || [];
-      const connectionDetails: ConnectionWithLocation[] = [];
-      
-      // For each connection ID, get their details and location
-      for (const connectionId of userConnections) {
-        try {
-          const connectionRef = doc(db, 'users', connectionId);
-          const connectionSnap = await getDoc(connectionRef);
+    // Listen for user document changes
+    const unsubscribeUser = onSnapshot(userRef, async (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const userData = docSnapshot.data();
+        
+        // If user has connections, fetch their current locations
+        if (userData.connections && Array.isArray(userData.connections)) {
+          const connectionsWithLocations = await Promise.all(
+            userData.connections.map(async (connection: any) => {
+              const connectionRef = doc(db, 'users', connection.id);
+              const connectionDoc = await getDoc(connectionRef);
+              
+              if (connectionDoc.exists()) {
+                const connectionData = connectionDoc.data();
+                return {
+                  id: connection.id,
+                  userId: connection.id,
+                  displayName: connection.displayName,
+                  email: connection.email,
+                  photoURL: connectionData.photoURL,
+                  location: connectionData.location ? {
+                    ...connectionData.location,
+                    // Convert Firebase timestamp to ISO string if needed
+                    timestamp: connectionData.location.timestamp instanceof Timestamp 
+                      ? connectionData.location.timestamp.toDate().toISOString()
+                      : connectionData.location.timestamp
+                  } : null
+                };
+              }
+              
+              return {
+                id: connection.id,
+                userId: connection.id,
+                displayName: connection.displayName,
+                email: connection.email,
+                photoURL: null,
+                location: null
+              };
+            })
+          );
           
-          if (connectionSnap.exists()) {
-            const connectionData = connectionSnap.data();
-            connectionDetails.push({
-              id: connectionId,
-              email: connectionData.email,
-              displayName: connectionData.displayName || connectionData.email,
-              location: connectionData.location || null,
-              status: 'accepted'
-            });
-          }
-        } catch (error) {
-          console.error(`Error fetching connection ${connectionId}:`, error);
+          setConnections(connectionsWithLocations);
+        } else {
+          setConnections([]);
         }
       }
-      
-      setConnections(connectionDetails);
     });
-
+    
+    // Listen for connection requests
+    const requestsRef = collection(db, 'connectionRequests');
+    const q = query(requestsRef, where('toId', '==', currentUser.uid));
+    
+    const unsubscribeRequests = onSnapshot(q, (querySnapshot) => {
+      const requests: ConnectionRequest[] = [];
+      
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        
+        requests.push({
+          id: doc.id,
+          fromId: data.fromId,
+          fromName: data.fromName,
+          fromEmail: data.fromEmail,
+          toId: data.toId,
+          status: data.status,
+          timestamp: data.timestamp instanceof Timestamp 
+            ? data.timestamp.toDate().toISOString()
+            : data.timestamp
+        });
+      });
+      
+      setConnectionRequests(requests);
+    });
+    
     return () => {
-      requestsUnsubscribe();
-      userUnsubscribe();
+      unsubscribeUser();
+      unsubscribeRequests();
     };
-  }, [currentUser, db]);
-
-  // The value to provide in the context
+  }, [currentUser]);
+  
+  // Clean up tracking on unmount
+  useEffect(() => {
+    return () => {
+      if (trackingInterval) {
+        clearInterval(trackingInterval);
+      }
+    };
+  }, [trackingInterval]);
+  
   const value = {
     currentLocation,
     connections,
@@ -380,17 +499,13 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
     stopTrackingLocation,
     sendConnectionRequest,
     respondToConnectionRequest,
-    searchUsersByEmail
+    searchUsersByEmail,
+    updateConnectionNickname
   };
-
+  
   return (
     <LocationContext.Provider value={value}>
       {children}
     </LocationContext.Provider>
   );
-}
-
-// Custom hook to use the Location context
-export function useLocation() {
-  return useContext(LocationContext);
 } 

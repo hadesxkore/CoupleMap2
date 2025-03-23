@@ -21,6 +21,20 @@ let DefaultIcon = L.icon({
 
 L.Marker.prototype.options.icon = DefaultIcon;
 
+// Philippines bounds coordinates
+const PHILIPPINES_BOUNDS = {
+  north: 21.120611, // Northern tip of Luzon
+  south: 4.566667,  // Southern tip of Tawi-Tawi
+  east: 126.604393, // Eastern tip of Mindanao
+  west: 116.704153, // Western tip of Palawan
+};
+
+// Philippines center point (approximate)
+const PHILIPPINES_CENTER = {
+  lat: 12.8797,
+  lng: 121.7740,
+};
+
 // Create a custom div marker for user profiles
 const createProfileMarker = (imgSrc, size = 48, selected = false) => {
   return L.divIcon({
@@ -123,11 +137,19 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
     addMarkerStyles();
     
     if (!mapRef.current) {
-      // Create the map with a default view
+      // Create the map with Philippines as the center
       const mapInstance = L.map('map', {
         zoomControl: false, // We'll add zoom control manually in a better position
-        attributionControl: false // We'll add attribution control manually
-      }).setView([0, 0], 2);
+        attributionControl: false, // We'll add attribution control manually
+        minZoom: 6, // Restrict zoom out to see larger area
+        maxBoundsViscosity: 1.0 // Make the bounds sticky
+      }).setView([PHILIPPINES_CENTER.lat, PHILIPPINES_CENTER.lng], 6);
+      
+      // Set map boundaries to Philippines
+      mapInstance.setMaxBounds([
+        [PHILIPPINES_BOUNDS.south - 5, PHILIPPINES_BOUNDS.west - 5], // Add some padding
+        [PHILIPPINES_BOUNDS.north + 5, PHILIPPINES_BOUNDS.east + 5]
+      ]);
       
       // Add OpenStreetMap tile layer - Streets style by default
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -198,9 +220,20 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
     const { latitude, longitude } = currentLocation;
     console.log('Updating map with user location:', { latitude, longitude, accuracy: currentLocation.accuracy });
     
+    // Check if the location is within Philippines bounds with some padding
+    const isWithinPhilippines = 
+      latitude >= PHILIPPINES_BOUNDS.south - 5 && 
+      latitude <= PHILIPPINES_BOUNDS.north + 5 && 
+      longitude >= PHILIPPINES_BOUNDS.west - 5 && 
+      longitude <= PHILIPPINES_BOUNDS.east + 5;
+    
+    // If not within Philippines, use a default location (Manila)
+    const finalLat = isWithinPhilippines ? latitude : 14.5995;
+    const finalLng = isWithinPhilippines ? longitude : 120.9842;
+    
     // Create or update user marker
     if (markersRef.current['user']) {
-      markersRef.current['user'].setLatLng([latitude, longitude]);
+      markersRef.current['user'].setLatLng([finalLat, finalLng]);
       markersRef.current['user'].setPopupContent(`
         <div style="text-align: center; padding: 5px;">
           <strong>${currentUser?.displayName || 'You'}</strong>
@@ -212,7 +245,7 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
       // Get profile image URL or use default
       const profileImageUrl = currentUser?.photoURL || 'https://api.dicebear.com/7.x/thumbs/svg?seed=' + (currentUser?.displayName || 'user');
       
-      const marker = L.marker([latitude, longitude], { 
+      const marker = L.marker([finalLat, finalLng], { 
         icon: createProfileMarker(profileImageUrl, 48, false)
       })
         .addTo(mapInstance)
@@ -229,7 +262,7 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
     
     // Center map on user's location if no connection is selected
     if (!selectedConnectionId) {
-      mapInstance.setView([latitude, longitude], 15);
+      mapInstance.setView([finalLat, finalLng], 15);
     }
     
     // Update accuracy circle
@@ -238,7 +271,7 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
         mapInstance.removeLayer(markersRef.current['accuracy']);
       }
       
-      const circle = L.circle([latitude, longitude], {
+      const circle = L.circle([finalLat, finalLng], {
         radius: currentLocation.accuracy,
         fill: true,
         fillColor: '#3b82f6',
@@ -264,16 +297,31 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
       if (!connection.location) return;
       
       const { latitude, longitude } = connection.location;
+      
+      // Check if the location is within Philippines bounds with some padding
+      const isWithinPhilippines = 
+        latitude >= PHILIPPINES_BOUNDS.south - 5 && 
+        latitude <= PHILIPPINES_BOUNDS.north + 5 && 
+        longitude >= PHILIPPINES_BOUNDS.west - 5 && 
+        longitude <= PHILIPPINES_BOUNDS.east + 5;
+      
+      // If not within Philippines, use a default location (Manila)
+      const finalLat = isWithinPhilippines ? latitude : 14.5995;
+      const finalLng = isWithinPhilippines ? longitude : 120.9842;
+      
       const isSelected = connection.id === selectedConnectionId;
       activeConnectionIds.add(connection.id);
       
-      // Get profile image URL using DiceBear API
-      const profileImageUrl = `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
+      // Get profile image URL
+      let profileImageUrl = connection.photoURL;
+      if (!profileImageUrl) {
+        profileImageUrl = `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
+      }
       
       // Create or update marker
       if (markersRef.current[connection.id]) {
         const marker = markersRef.current[connection.id];
-        marker.setLatLng([latitude, longitude]);
+        marker.setLatLng([finalLat, finalLng]);
         
         // Update icon if selection state changed
         marker.setIcon(createProfileMarker(profileImageUrl, 48, isSelected));
@@ -287,7 +335,7 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
         `);
       } else {
         // Create new marker
-        const marker = L.marker([latitude, longitude], {
+        const marker = L.marker([finalLat, finalLng], {
           icon: createProfileMarker(profileImageUrl, 48, isSelected)
         })
           .addTo(mapInstance)
@@ -402,6 +450,8 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
   
   // Helper function to create a simple route line
   const createSimpleRouteLine = (mapInstance, userLocation, connectionLocation) => {
+    if (!userLocation || !connectionLocation) return;
+    
     const userLatLng = [userLocation.latitude, userLocation.longitude];
     const connectionLatLng = [
       connectionLocation.latitude, 
@@ -416,7 +466,8 @@ export function Map({ currentLocation, connections, selectedConnectionId, onUpda
       // Add additional styling to make it more visible
       dashArray: null,
       lineCap: 'round',
-      lineJoin: 'round'
+      lineJoin: 'round',
+      zIndex: 1000 // Ensure high z-index
     }).addTo(mapInstance);
     
     // Ensure it stays on top

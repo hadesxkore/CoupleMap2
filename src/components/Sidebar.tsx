@@ -7,6 +7,8 @@ import { Badge } from './ui/badge';
 import { useLocation } from '../contexts/LocationContext';
 import { toast } from 'sonner';
 import { useEffect, useState } from 'react';
+import { ProfileEditor } from './ProfileEditor';
+import { ConnectionProfileEditor } from './ConnectionProfileEditor';
 
 export interface SidebarProps {
   user: User | null;
@@ -39,8 +41,10 @@ export function Sidebar({
 }: SidebarProps) {
   const { respondToConnectionRequest } = useLocation();
   const [isMobile, setIsMobile] = useState(false);
-  // Track if user deliberately closed sidebar to avoid auto-reopening
   const [userClosedSidebar, setUserClosedSidebar] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [connectionEditorOpen, setConnectionEditorOpen] = useState(false);
+  const [selectedConnectionForEdit, setSelectedConnectionForEdit] = useState<ConnectionWithLocation | null>(null);
   
   const pendingRequests = connectionRequests.filter(req => req.status === 'pending');
 
@@ -65,6 +69,18 @@ export function Sidebar({
   const handleSelectConnection = (id: string) => {
     // Select the connection without automatically closing sidebar
     onSelectConnection(id);
+  };
+  
+  // Handle opening profile editor
+  const handleOpenProfileEditor = () => {
+    setProfileEditorOpen(true);
+  };
+  
+  // Handle opening connection editor
+  const handleOpenConnectionEditor = (connection: ConnectionWithLocation, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent selecting the connection
+    setSelectedConnectionForEdit(connection);
+    setConnectionEditorOpen(true);
   };
 
   const handleAcceptRequest = async (requestId: string) => {
@@ -138,17 +154,19 @@ export function Sidebar({
         {/* User profile header */}
         <div className="p-4 border-b border-border">
           <div className="flex items-center space-x-3">
-            <Avatar className="h-10 w-10">
-              <AvatarImage src={user?.photoURL || undefined} />
-              <AvatarFallback>
-                {user?.displayName
-                  ? user.displayName.substring(0, 2).toUpperCase()
-                  : user?.email
-                  ? user.email.substring(0, 2).toUpperCase()
-                  : 'US'}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 overflow-hidden">
+            <div className="cursor-pointer" onClick={handleOpenProfileEditor}>
+              <Avatar className="h-10 w-10 transition-all duration-200 hover:opacity-80">
+                <AvatarImage src={user?.photoURL || undefined} />
+                <AvatarFallback>
+                  {user?.displayName
+                    ? user.displayName.substring(0, 2).toUpperCase()
+                    : user?.email
+                    ? user.email.substring(0, 2).toUpperCase()
+                    : 'US'}
+                </AvatarFallback>
+              </Avatar>
+            </div>
+            <div className="flex-1 overflow-hidden cursor-pointer" onClick={handleOpenProfileEditor}>
               <p className="font-medium truncate">
                 {user?.displayName || user?.email || 'User'}
               </p>
@@ -158,6 +176,29 @@ export function Sidebar({
                 </p>
               )}
             </div>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="h-8 w-8" 
+              onClick={handleOpenProfileEditor}
+              title="Edit Profile"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-4 w-4"
+              >
+                <path d="M12 20h9"></path>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+              </svg>
+            </Button>
           </div>
         </div>
         
@@ -255,6 +296,29 @@ export function Sidebar({
                             </p>
                           </div>
                         </div>
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-7 w-7 text-primary-foreground/70 hover:text-primary-foreground"
+                          onClick={(e) => handleOpenConnectionEditor(connection, e)}
+                          title="Edit Connection"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="24"
+                            height="24"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="h-3.5 w-3.5"
+                          >
+                            <path d="M12 20h9"></path>
+                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                          </svg>
+                        </Button>
                       </div>
                     </div>
                   ))}
@@ -380,6 +444,27 @@ export function Sidebar({
           </Button>
         </div>
       </div>
+      
+      {/* Profile Editor Dialog */}
+      {user && (
+        <ProfileEditor 
+          user={user} 
+          isOpen={profileEditorOpen} 
+          onClose={() => setProfileEditorOpen(false)} 
+        />
+      )}
+      
+      {/* Connection Editor Dialog */}
+      {selectedConnectionForEdit && (
+        <ConnectionProfileEditor
+          connection={selectedConnectionForEdit}
+          isOpen={connectionEditorOpen}
+          onClose={() => {
+            setConnectionEditorOpen(false);
+            setSelectedConnectionForEdit(null);
+          }}
+        />
+      )}
     </>
   );
 } 
