@@ -276,23 +276,59 @@ export function LocationProvider({ children }: LocationProviderProps) {
           throw new Error('User data not found');
         }
         
-        // Add connection to sender's connections
-        await updateDoc(fromUserRef, {
-          connections: arrayUnion({
-            id: currentUser.uid,
-            displayName: currentUser.displayName || 'Anonymous',
-            email: currentUser.email
-          })
-        });
+        const fromUserData = fromUserDoc.data();
+        const toUserData = toUserDoc.data();
         
-        // Add connection to recipient's connections
-        await updateDoc(toUserRef, {
-          connections: arrayUnion({
-            id: requestData.fromId,
-            displayName: requestData.fromName,
-            email: requestData.fromEmail
-          })
-        });
+        // Check if connections arrays exist, create them if not
+        const fromConnections = fromUserData.connections || [];
+        const toConnections = toUserData.connections || [];
+        
+        // Prepare connection objects
+        const fromConnectionObj = {
+          id: currentUser.uid,
+          displayName: currentUser.displayName || 'Anonymous',
+          email: currentUser.email
+        };
+        
+        const toConnectionObj = {
+          id: requestData.fromId,
+          displayName: requestData.fromName,
+          email: requestData.fromEmail
+        };
+        
+        // Check if connection already exists to avoid duplicates
+        const fromHasConnection = fromConnections.some((conn: any) => conn.id === fromConnectionObj.id);
+        const toHasConnection = toConnections.some((conn: any) => conn.id === toConnectionObj.id);
+        
+        // Add connection to sender's connections if not exists
+        if (!fromHasConnection) {
+          await updateDoc(fromUserRef, {
+            connections: arrayUnion(fromConnectionObj)
+          });
+        }
+        
+        // Add connection to recipient's connections if not exists
+        if (!toHasConnection) {
+          await updateDoc(toUserRef, {
+            connections: arrayUnion(toConnectionObj)
+          });
+        }
+        
+        // Update local state
+        // Show immediate feedback by adding connection to local state
+        if (!toHasConnection) {
+          setConnections(prev => [
+            ...prev,
+            {
+              id: requestData.fromId,
+              userId: requestData.fromId,
+              displayName: requestData.fromName,
+              email: requestData.fromEmail,
+              photoURL: null,
+              location: null
+            }
+          ]);
+        }
       }
       
       // Show success notification for the user
@@ -405,46 +441,75 @@ export function LocationProvider({ children }: LocationProviderProps) {
       if (docSnapshot.exists()) {
         const userData = docSnapshot.data();
         
+        console.log("User data updated:", userData); // Debug log
+        
         // If user has connections, fetch their current locations
         if (userData.connections && Array.isArray(userData.connections)) {
+          console.log("Connections found:", userData.connections.length); // Debug log
+          
           const connectionsWithLocations = await Promise.all(
             userData.connections.map(async (connection: any) => {
-              const connectionRef = doc(db, 'users', connection.id);
-              const connectionDoc = await getDoc(connectionRef);
+              // Skip if connection doesn't have an id
+              if (!connection || !connection.id) {
+                console.warn("Invalid connection found:", connection);
+                return null;
+              }
               
-              if (connectionDoc.exists()) {
-                const connectionData = connectionDoc.data();
+              try {
+                const connectionRef = doc(db, 'users', connection.id);
+                const connectionDoc = await getDoc(connectionRef);
+                
+                if (connectionDoc.exists()) {
+                  const connectionData = connectionDoc.data();
+                  return {
+                    id: connection.id,
+                    userId: connection.id,
+                    displayName: connection.displayName || 'Unknown User',
+                    email: connection.email || 'no-email',
+                    photoURL: connectionData.photoURL,
+                    location: connectionData.location ? {
+                      ...connectionData.location,
+                      // Convert Firebase timestamp to ISO string if needed
+                      timestamp: connectionData.location.timestamp instanceof Timestamp 
+                        ? connectionData.location.timestamp.toDate().toISOString()
+                        : connectionData.location.timestamp
+                    } : null
+                  };
+                }
+                
                 return {
                   id: connection.id,
                   userId: connection.id,
-                  displayName: connection.displayName,
-                  email: connection.email,
-                  photoURL: connectionData.photoURL,
-                  location: connectionData.location ? {
-                    ...connectionData.location,
-                    // Convert Firebase timestamp to ISO string if needed
-                    timestamp: connectionData.location.timestamp instanceof Timestamp 
-                      ? connectionData.location.timestamp.toDate().toISOString()
-                      : connectionData.location.timestamp
-                  } : null
+                  displayName: connection.displayName || 'Unknown User',
+                  email: connection.email || 'no-email',
+                  photoURL: null,
+                  location: null
                 };
+              } catch (error) {
+                console.error(`Error fetching connection ${connection.id}:`, error);
+                return null;
               }
-              
-              return {
-                id: connection.id,
-                userId: connection.id,
-                displayName: connection.displayName,
-                email: connection.email,
-                photoURL: null,
-                location: null
-              };
             })
           );
           
-          setConnections(connectionsWithLocations);
+          // Filter out null values from failed connections
+          const validConnections = connectionsWithLocations.filter(conn => conn !== null) as ConnectionWithLocation[];
+          console.log("Valid connections processed:", validConnections.length); // Debug log
+          
+          setConnections(validConnections);
         } else {
+          console.log("No connections array found in user data"); // Debug log
+          
+          // Initialize connections array if it doesn't exist
+          if (!userData.connections) {
+            await updateDoc(userRef, { connections: [] });
+          }
+          
           setConnections([]);
         }
+      } else {
+        console.log("User document doesn't exist"); // Debug log
+        setConnections([]);
       }
     });
     

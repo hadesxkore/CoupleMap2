@@ -19,7 +19,8 @@ export default function Dashboard() {
     stopTrackingLocation,
     isTracking,
     sendConnectionRequest,
-    searchUsersByEmail
+    searchUsersByEmail,
+    respondToConnectionRequest
   } = useLocation();
   
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
@@ -27,7 +28,6 @@ export default function Dashboard() {
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
   // Use isMobile for responsive design
-  // @ts-ignore - Ignore unused variable
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchResults, setSearchResults] = useState<{id: string, email: string, displayName: string}[]>([]);
@@ -61,6 +61,16 @@ export default function Dashboard() {
       stopTrackingLocation();
     };
   }, []);
+
+  // Debug log for connections changes
+  useEffect(() => {
+    console.log("Dashboard connections updated:", connections);
+  }, [connections]);
+
+  // Debug log for connection requests
+  useEffect(() => {
+    console.log("Connection requests updated:", connectionRequests);
+  }, [connectionRequests]);
 
   // Handle search as user types
   const handleSearchEmail = (value: string) => {
@@ -114,6 +124,17 @@ export default function Dashboard() {
       console.error('Error adding connection:', error);
     } finally {
       setConnectionLoading(false);
+    }
+  };
+
+  // Handle connection request response
+  const handleConnectionResponse = async (requestId: string, accept: boolean) => {
+    try {
+      await respondToConnectionRequest(requestId, accept);
+      // UI update will happen automatically via context listeners
+    } catch (error: any) {
+      toast.error(`Error responding to request: ${error.message}`);
+      console.error('Error responding to request:', error);
     }
   };
 

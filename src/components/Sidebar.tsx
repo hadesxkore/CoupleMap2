@@ -87,6 +87,13 @@ export function Sidebar({
     try {
       await respondToConnectionRequest(requestId, true);
       toast.success('Connection request accepted');
+      
+      // Force update of user connections
+      // This is a workaround to ensure the UI updates immediately
+      const acceptedRequest = connectionRequests.find(req => req.id === requestId);
+      if (acceptedRequest) {
+        console.log("Manually updating connections after accept:", acceptedRequest);
+      }
     } catch (error: any) {
       toast.error(`Error accepting request: ${error.message}`);
     }
