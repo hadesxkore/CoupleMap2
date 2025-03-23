@@ -136,6 +136,7 @@ export function Map({
   const [message, setMessage] = useState('');
   const [activeMessage, setActiveMessage] = useState<string | null>(null);
   const [connectionMessages, setConnectionMessages] = useState<{[userId: string]: string}>({});
+  const [messageTargetId, setMessageTargetId] = useState<string | null>(null);
   const { currentUser } = useAuth();
   
   // Get Firestore reference
@@ -475,6 +476,8 @@ export function Map({
       // Add click event to open message modal
       marker.on('click', () => {
         setMessageModalOpen(true);
+        // When clicking own marker, target the selected connection if any
+        setMessageTargetId(selectedConnectionId);
       });
       
       // Add to markers ref
@@ -519,7 +522,7 @@ export function Map({
     if (tileError && mapRef.current) {
       createTileLayer(mapRef.current, mapType);
     }
-  }, [currentLocation, currentUser, tileError, mapType, activeMessage]);
+  }, [currentLocation, currentUser, tileError, mapType, activeMessage, selectedConnectionId]);
   
   // Load user's active message from Firestore
   useEffect(() => {
@@ -532,14 +535,20 @@ export function Map({
       if (docSnapshot.exists()) {
         const data = docSnapshot.data();
         if (data.message && data.expiresAt && new Date(data.expiresAt) > new Date()) {
-          setActiveMessage(data.message);
-          
-          // Set a timer to clear the message when it expires
-          const expiryTime = new Date(data.expiresAt).getTime() - new Date().getTime();
-          if (expiryTime > 0) {
-            setTimeout(() => {
-              setActiveMessage(null);
-            }, expiryTime);
+          // Only show message above your location if it's not targeted
+          // or if it's targeted to the selected connection
+          if (!data.targetUserId || data.targetUserId === selectedConnectionId) {
+            setActiveMessage(data.message);
+            
+            // Set a timer to clear the message when it expires
+            const expiryTime = new Date(data.expiresAt).getTime() - new Date().getTime();
+            if (expiryTime > 0) {
+              setTimeout(() => {
+                setActiveMessage(null);
+              }, expiryTime);
+            }
+          } else {
+            setActiveMessage(null);
           }
         } else {
           setActiveMessage(null);
@@ -550,11 +559,11 @@ export function Map({
     });
     
     return () => unsubscribe();
-  }, [currentUser, db]);
+  }, [currentUser, db, selectedConnectionId]);
   
   // Listen for messages from connections
   useEffect(() => {
-    if (!connections.length) return;
+    if (!connections.length || !currentUser) return;
     
     const unsubscribes: (() => void)[] = [];
     const newMessages: {[userId: string]: string} = {};
@@ -566,7 +575,9 @@ export function Map({
       const unsubscribe = onSnapshot(messageRef, (docSnapshot) => {
         if (docSnapshot.exists()) {
           const data = docSnapshot.data();
-          if (data.message && data.expiresAt && new Date(data.expiresAt) > new Date()) {
+          // Only show message if it's meant for current user (targetUserId is current user or null)
+          if (data.message && data.expiresAt && new Date(data.expiresAt) > new Date() && 
+              (!data.targetUserId || data.targetUserId === currentUser.uid)) {
             // Store the message with the connection ID as the key
             newMessages[connection.id] = data.message;
             setConnectionMessages(prev => ({
@@ -605,7 +616,7 @@ export function Map({
     return () => {
       unsubscribes.forEach(unsubscribe => unsubscribe());
     };
-  }, [connections, db]);
+  }, [connections, db, currentUser]);
   
   // Helper function to update marker popup with message
   const updateMarkerPopup = (connectionId: string, message: string) => {
@@ -905,19 +916,23 @@ export function Map({
       // Reference to the user's message document
       const messageRef = doc(db, 'userMessages', currentUser.uid);
       
-      // Save message to Firestore
+      // Save message to Firestore with target info
       await setDoc(messageRef, {
         userId: currentUser.uid,
         message: message.trim(),
         timestamp: serverTimestamp(),
-        expiresAt: expiresAt.toISOString()
+        expiresAt: expiresAt.toISOString(),
+        targetUserId: messageTargetId || selectedConnectionId || null // Target the selected connection
       });
       
       // Clear local message input
       setMessage('');
       setMessageModalOpen(false);
+      setMessageTargetId(null);
       
-      toast.success('Message shared successfully');
+      toast.success(messageTargetId || selectedConnectionId 
+        ? 'Message sent to connection'
+        : 'Message shared with all connections');
     } catch (error) {
       console.error('Error sharing message:', error);
       toast.error('Failed to share message');
@@ -965,7 +980,11 @@ export function Map({
         <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-[1001]">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden">
             <div className="flex justify-between items-center px-6 py-4 border-b">
-              <h2 className="font-bold text-lg">Share a Message</h2>
+              <h2 className="font-bold text-lg">
+                {messageTargetId || selectedConnectionId 
+                  ? `Send Message to ${connections.find(c => c.id === (messageTargetId || selectedConnectionId))?.displayName || 'Connection'}`
+                  : 'Share a Message'}
+              </h2>
               <button 
                 onClick={() => setMessageModalOpen(false)}
                 className="text-gray-500 hover:text-gray-700"
@@ -979,7 +998,9 @@ export function Map({
               <div className="space-y-4">
                 <div>
                   <p className="text-sm text-gray-600 mb-2">
-                    This message will appear above your location on the map and will be visible to your connections.
+                    {messageTargetId || selectedConnectionId 
+                      ? `This message will be visible only to ${connections.find(c => c.id === (messageTargetId || selectedConnectionId))?.displayName}.`
+                      : 'This message will appear above your location on the map.'}
                   </p>
                   <textarea
                     value={message}
@@ -992,9 +1013,36 @@ export function Map({
                     {message.length}/200 characters
                   </div>
                 </div>
+                
+                {/* Add connection selector if none selected */}
+                {!messageTargetId && !selectedConnectionId && connections.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Choose who can see this message:
+                    </label>
+                    <div className="relative">
+                      <select
+                        className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                        value={messageTargetId || ''}
+                        onChange={(e) => setMessageTargetId(e.target.value || null)}
+                      >
+                        <option value="">Everyone</option>
+                        {connections.map(conn => (
+                          <option key={conn.id} value={conn.id}>
+                            Only {conn.displayName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex justify-end space-x-2 pt-2">
                   <button
-                    onClick={() => setMessageModalOpen(false)}
+                    onClick={() => {
+                      setMessageModalOpen(false);
+                      setMessageTargetId(null);
+                    }}
                     className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                   >
                     Cancel
@@ -1004,7 +1052,7 @@ export function Map({
                     disabled={!message.trim()}
                     className={`px-4 py-2 rounded-md text-white ${message.trim() ? 'bg-blue-500 hover:bg-blue-600' : 'bg-blue-300 cursor-not-allowed'}`}
                   >
-                    Share Message
+                    Send Message
                   </button>
                 </div>
               </div>
