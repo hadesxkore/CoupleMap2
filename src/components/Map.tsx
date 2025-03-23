@@ -10,6 +10,7 @@ import 'leaflet-polylinedecorator';
 import { ConnectionWithLocation, ConnectionRequest } from '../contexts/LocationContext';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
+import { getFirestore, doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 
 // Fix Leaflet marker icon issue
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
@@ -134,7 +135,11 @@ export function Map({
   const [messageModalOpen, setMessageModalOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [activeMessage, setActiveMessage] = useState<string | null>(null);
+  const [connectionMessages, setConnectionMessages] = useState<{[userId: string]: string}>({});
   const { currentUser } = useAuth();
+  
+  // Get Firestore reference
+  const db = getFirestore();
   
   // Track tile loading attempts
   const loadingAttemptsRef = useRef(0);
@@ -516,6 +521,177 @@ export function Map({
     }
   }, [currentLocation, currentUser, tileError, mapType, activeMessage]);
   
+  // Load user's active message from Firestore
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    // Listen for the current user's message
+    const messageRef = doc(db, 'userMessages', currentUser.uid);
+    
+    const unsubscribe = onSnapshot(messageRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const data = docSnapshot.data();
+        if (data.message && data.expiresAt && new Date(data.expiresAt) > new Date()) {
+          setActiveMessage(data.message);
+          
+          // Set a timer to clear the message when it expires
+          const expiryTime = new Date(data.expiresAt).getTime() - new Date().getTime();
+          if (expiryTime > 0) {
+            setTimeout(() => {
+              setActiveMessage(null);
+            }, expiryTime);
+          }
+        } else {
+          setActiveMessage(null);
+        }
+      } else {
+        setActiveMessage(null);
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [currentUser, db]);
+  
+  // Listen for messages from connections
+  useEffect(() => {
+    if (!connections.length) return;
+    
+    const unsubscribes: (() => void)[] = [];
+    const newMessages: {[userId: string]: string} = {};
+    
+    // Listen for each connection's message
+    connections.forEach(connection => {
+      const messageRef = doc(db, 'userMessages', connection.id);
+      
+      const unsubscribe = onSnapshot(messageRef, (docSnapshot) => {
+        if (docSnapshot.exists()) {
+          const data = docSnapshot.data();
+          if (data.message && data.expiresAt && new Date(data.expiresAt) > new Date()) {
+            // Store the message with the connection ID as the key
+            newMessages[connection.id] = data.message;
+            setConnectionMessages(prev => ({
+              ...prev,
+              [connection.id]: data.message
+            }));
+            
+            // Update marker popup if marker exists
+            if (markersRef.current[connection.id] && mapRef.current && connection.location) {
+              updateMarkerPopup(connection.id, data.message);
+            }
+            
+            // Set a timer to clear the message when it expires
+            const expiryTime = new Date(data.expiresAt).getTime() - new Date().getTime();
+            if (expiryTime > 0) {
+              setTimeout(() => {
+                setConnectionMessages(prev => {
+                  const updated = {...prev};
+                  delete updated[connection.id];
+                  return updated;
+                });
+                
+                // Clear popup when message expires
+                if (markersRef.current[connection.id] && mapRef.current) {
+                  markersRef.current[connection.id].closePopup();
+                }
+              }, expiryTime);
+            }
+          }
+        }
+      });
+      
+      unsubscribes.push(unsubscribe);
+    });
+    
+    return () => {
+      unsubscribes.forEach(unsubscribe => unsubscribe());
+    };
+  }, [connections, db]);
+  
+  // Helper function to update marker popup with message
+  const updateMarkerPopup = (connectionId: string, message: string) => {
+    if (!mapRef.current || !markersRef.current[connectionId]) return;
+    
+    const marker = markersRef.current[connectionId];
+    
+    // Create or update popup with message
+    const popup = L.popup({
+      className: 'message-popup',
+      closeButton: true,
+      autoClose: false,
+      closeOnEscapeKey: true,
+      closeOnClick: false,
+      offset: [0, -50]
+    })
+    .setLatLng(marker.getLatLng())
+    .setContent(`
+      <div class="message-bubble">
+        <p>${message}</p>
+      </div>
+    `);
+    
+    marker.bindPopup(popup);
+    marker.openPopup();
+  };
+  
+  // Update markers for connections and show their messages if available
+  useEffect(() => {
+    if (!mapRef.current || !currentLocation) return;
+    const map = mapRef.current;
+    
+    // Process all connections
+    allConnections.forEach(connection => {
+      if (!connection.location) return;
+      
+      const { latitude, longitude } = connection.location;
+      
+      // Create or update marker
+      if (markersRef.current[connection.id]) {
+        markersRef.current[connection.id].setLatLng([latitude, longitude]);
+      } else {
+        const profilePic = connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
+        
+        const marker = L.marker([latitude, longitude], {
+          icon: createProfileMarker(profilePic, connection.displayName, connection.id === selectedConnectionId),
+          zIndexOffset: connection.id === selectedConnectionId ? 900 : 800
+        }).addTo(map);
+        
+        // Add to markers ref
+        markersRef.current[connection.id] = marker;
+      }
+      
+      // Update marker style if selected
+      if (connection.id === selectedConnectionId) {
+        const profilePic = connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
+        markersRef.current[connection.id].setIcon(
+          createProfileMarker(profilePic, connection.displayName, true)
+        );
+        markersRef.current[connection.id].setZIndexOffset(900);
+      } else {
+        const profilePic = connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
+        markersRef.current[connection.id].setIcon(
+          createProfileMarker(profilePic, connection.displayName, false)
+        );
+        markersRef.current[connection.id].setZIndexOffset(800);
+      }
+      
+      // Show message if connection has an active message
+      if (connectionMessages[connection.id]) {
+        updateMarkerPopup(connection.id, connectionMessages[connection.id]);
+      }
+    });
+    
+    // Clean up markers for connections that are no longer in the list
+    Object.keys(markersRef.current).forEach(id => {
+      if (id === 'currentUser') return;
+      
+      const stillExists = allConnections.some(conn => conn.id === id);
+      if (!stillExists) {
+        map.removeLayer(markersRef.current[id]);
+        delete markersRef.current[id];
+      }
+    });
+  }, [allConnections, selectedConnectionId, connectionMessages]);
+  
   // Helper function to create a simple route line
   const createRouteLine = (from: L.LatLng, to: L.LatLng, map: L.Map) => {
     // Create a polyline with decent styling that will be visible
@@ -718,16 +894,33 @@ export function Map({
   };
   
   // Handle sending a new message
-  const handleSendMessage = () => {
-    if (message.trim()) {
-      setActiveMessage(message.trim());
+  const handleSendMessage = async () => {
+    if (!message.trim() || !currentUser) return;
+    
+    try {
+      // Create expiry time (1 minute from now)
+      const expiresAt = new Date();
+      expiresAt.setMinutes(expiresAt.getMinutes() + 1);
+      
+      // Reference to the user's message document
+      const messageRef = doc(db, 'userMessages', currentUser.uid);
+      
+      // Save message to Firestore
+      await setDoc(messageRef, {
+        userId: currentUser.uid,
+        message: message.trim(),
+        timestamp: serverTimestamp(),
+        expiresAt: expiresAt.toISOString()
+      });
+      
+      // Clear local message input
       setMessage('');
       setMessageModalOpen(false);
       
-      // Automatically clear message after 1 minute
-      setTimeout(() => {
-        setActiveMessage(null);
-      }, 60000);
+      toast.success('Message shared successfully');
+    } catch (error) {
+      console.error('Error sharing message:', error);
+      toast.error('Failed to share message');
     }
   };
   

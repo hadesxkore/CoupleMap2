@@ -580,18 +580,84 @@ export function LocationProvider({ children }: LocationProviderProps) {
     }
     
     try {
-      // Get the connection document reference
-      const connectionRef = doc(db, 'connections', connectionId);
+      // Find the connection in the current user's connections array
+      const userConnection = connections.find(conn => conn.id === connectionId);
       
-      // Delete the connection document
-      await deleteDoc(connectionRef);
+      if (!userConnection) {
+        throw new Error('Connection not found');
+      }
+      
+      // Reference to both users' documents
+      const currentUserRef = doc(db, 'users', currentUser.uid);
+      const otherUserRef = doc(db, 'users', connectionId);
+      
+      // Get current data for both users
+      const currentUserDoc = await getDoc(currentUserRef);
+      const otherUserDoc = await getDoc(otherUserRef);
+      
+      if (!currentUserDoc.exists()) {
+        throw new Error('Current user document not found');
+      }
+      
+      // Update current user's connections - remove the connection
+      const currentUserData = currentUserDoc.data();
+      const updatedConnections = (currentUserData.connections || [])
+        .filter((conn: any) => conn.id !== connectionId);
+      
+      await updateDoc(currentUserRef, {
+        connections: updatedConnections
+      });
+      
+      // If the other user exists, also remove the current user from their connections
+      if (otherUserDoc.exists()) {
+        const otherUserData = otherUserDoc.data();
+        const otherUserUpdatedConnections = (otherUserData.connections || [])
+          .filter((conn: any) => conn.id !== currentUser.uid);
+        
+        await updateDoc(otherUserRef, {
+          connections: otherUserUpdatedConnections
+        });
+      }
+      
+      // Find and delete any connection requests between the users
+      const requestsRef = collection(db, 'connectionRequests');
+      const q1 = query(
+        requestsRef,
+        where('fromId', '==', currentUser.uid),
+        where('toId', '==', connectionId)
+      );
+      const q2 = query(
+        requestsRef,
+        where('fromId', '==', connectionId),
+        where('toId', '==', currentUser.uid)
+      );
+      
+      const [snapshot1, snapshot2] = await Promise.all([
+        getDocs(q1),
+        getDocs(q2)
+      ]);
+      
+      // Delete any found connection requests
+      const deletePromises: Promise<void>[] = [];
+      
+      snapshot1.forEach(doc => {
+        deletePromises.push(deleteDoc(doc.ref));
+      });
+      
+      snapshot2.forEach(doc => {
+        deletePromises.push(deleteDoc(doc.ref));
+      });
+      
+      await Promise.all(deletePromises);
       
       // Update local state to remove the connection
       setConnections(prev => prev.filter(conn => conn.id !== connectionId));
       
+      toast.success(`Connection with ${userConnection.displayName} removed`);
       console.log(`Connection ${connectionId} removed successfully`);
     } catch (error) {
       console.error('Error removing connection:', error);
+      toast.error('Failed to remove connection');
       throw error;
     }
   };
