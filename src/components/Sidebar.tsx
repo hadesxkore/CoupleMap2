@@ -49,6 +49,27 @@ export function Sidebar({
   const pendingRequests = connectionRequests.filter(req => req.status === 'pending');
   const acceptedRequests = connectionRequests.filter(req => req.status === 'accepted');
 
+  // Create a merged connections list that includes both connections and accepted requests
+  const allConnections = [...connections];
+  
+  // Add accepted requests to connections if they're not already there
+  acceptedRequests.forEach(request => {
+    // Check if this accepted request is already in connections by ID
+    const alreadyInConnections = connections.some(conn => conn.id === request.fromId);
+    
+    if (!alreadyInConnections) {
+      // Add as a connection
+      allConnections.push({
+        id: request.fromId,
+        userId: request.fromId,
+        displayName: request.fromName,
+        email: request.fromEmail,
+        photoURL: null,
+        location: null
+      });
+    }
+  });
+
   // Detect mobile devices
   useEffect(() => {
     const checkIfMobile = () => {
@@ -60,6 +81,13 @@ export function Sidebar({
     
     return () => window.removeEventListener('resize', checkIfMobile);
   }, []);
+  
+  // Debug log for connections
+  useEffect(() => {
+    console.log("Sidebar connections:", connections);
+    console.log("Sidebar accepted requests:", acceptedRequests);
+    console.log("Sidebar all connections:", allConnections);
+  }, [connections, acceptedRequests]);
 
   // Custom toggle handler
   const handleToggle = () => {
@@ -225,9 +253,9 @@ export function Sidebar({
             <TabsList className="w-full mb-4 grid grid-cols-3">
               <TabsTrigger value="connections" className="relative">
                 Connections
-                {connections.length > 0 && (
+                {allConnections.length > 0 && (
                   <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center">
-                    {connections.length}
+                    {allConnections.length}
                   </Badge>
                 )}
               </TabsTrigger>
@@ -269,7 +297,7 @@ export function Sidebar({
                 Add Connection
               </Button>
               
-              {connections.length === 0 ? (
+              {allConnections.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground bg-secondary/20 rounded-lg">
                   <svg 
                     xmlns="http://www.w3.org/2000/svg" 
@@ -291,7 +319,7 @@ export function Sidebar({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {connections.map((connection) => (
+                  {allConnections.map((connection) => (
                     <div
                       key={connection.id}
                       onClick={() => handleSelectConnection(connection.id)}

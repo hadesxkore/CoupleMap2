@@ -1,9 +1,11 @@
 // @ts-nocheck - Skip type checking for the whole file - Leaflet types are incompatible
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 // @ts-ignore - Ignore TypeScript error for Leaflet import
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ConnectionWithLocation } from '../contexts/LocationContext';
+import 'leaflet-routing-machine';
+import 'leaflet-routing-machine/dist/leaflet-routing-machine.css';
+import { ConnectionWithLocation, ConnectionRequest } from '../contexts/LocationContext';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -34,6 +36,16 @@ const PHILIPPINES_CENTER = {
   lat: 12.8797,
   lng: 121.7740,
 };
+
+// Define the map boundaries for the Philippines
+const PH_BOUNDS = L.latLngBounds(
+  L.latLng(4.2158, 114.0952), // Southwest corner
+  L.latLng(21.3217, 126.6040)  // Northeast corner
+);
+
+// Default center to Manila if location is not available
+const DEFAULT_CENTER = [14.5995, 120.9842];
+const DEFAULT_ZOOM = 13;
 
 // Create a custom div marker for user profiles
 const createProfileMarker = (imgSrc, size = 48, selected = false) => {
@@ -113,6 +125,7 @@ interface Location {
 interface MapProps {
   currentLocation: Location | null;
   connections: ConnectionWithLocation[];
+  connectionRequests?: ConnectionRequest[]; // Make it optional for backward compatibility
   selectedConnectionId: string | null;
   onUpdateLocation: () => Promise<Location | undefined>;
 }
@@ -124,426 +137,349 @@ declare module 'leaflet' {
   }
 }
 
-export function Map({ currentLocation, connections, selectedConnectionId, onUpdateLocation }: MapProps) {
+export function Map({ 
+  currentLocation, 
+  connections, 
+  connectionRequests = [], // Default to empty array
+  selectedConnectionId,
+  onUpdateLocation
+}: MapProps) {
   const mapRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<{ [key: string]: L.Marker }>({});
-  const routingControlRef = useRef<any>(null);
-  const [mapStyle, setMapStyle] = useState('streets'); // 'streets' or 'satellite'
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const markersRef = useRef<{[key: string]: L.Marker}>({});
+  const routingControlRef = useRef<L.Routing.Control | null>(null);
+  const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets');
   const { currentUser } = useAuth();
 
-  // Initialize map and add styles
+  // Combine connections with accepted connection requests
+  const allConnections = [...connections];
+  
+  // Add connection requests to the connections list if they're not already present
+  connectionRequests.forEach(request => {
+    const existingConnection = connections.find(conn => conn.id === request.fromId);
+    if (!existingConnection) {
+      allConnections.push({
+        id: request.fromId,
+        userId: request.fromId,
+        displayName: request.fromName,
+        email: request.fromEmail,
+        photoURL: null,
+        location: null
+      });
+    }
+  });
+  
+  // Initialize map
   useEffect(() => {
-    // Add marker styles to the document
-    addMarkerStyles();
-    
-    if (!mapRef.current) {
-      // Create the map with Philippines as the center
-      const mapInstance = L.map('map', {
-        zoomControl: false, // We'll add zoom control manually in a better position
-        attributionControl: false, // We'll add attribution control manually
-        minZoom: 6, // Restrict zoom out to see larger area
-        maxBoundsViscosity: 1.0 // Make the bounds sticky
-      }).setView([PHILIPPINES_CENTER.lat, PHILIPPINES_CENTER.lng], 6);
+    if (mapContainerRef.current && !mapRef.current) {
+      // Create the map
+      const map = L.map(mapContainerRef.current, {
+        center: currentLocation 
+          ? [currentLocation.latitude, currentLocation.longitude] 
+          : DEFAULT_CENTER,
+        zoom: DEFAULT_ZOOM,
+        maxBounds: PH_BOUNDS,
+        maxBoundsViscosity: 1.0,
+        minZoom: 7
+      });
       
-      // Set map boundaries to Philippines
-      mapInstance.setMaxBounds([
-        [PHILIPPINES_BOUNDS.south - 5, PHILIPPINES_BOUNDS.west - 5], // Add some padding
-        [PHILIPPINES_BOUNDS.north + 5, PHILIPPINES_BOUNDS.east + 5]
-      ]);
-      
-      // Add OpenStreetMap tile layer - Streets style by default
+      // Add OpenStreetMap tile layer
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      }).addTo(mapInstance);
+      }).addTo(map);
       
-      mapRef.current = mapInstance;
-      
-      // Add zoom controls in a better position
+      // Add map controls in better positions for mobile
+      map.zoomControl.remove();
       L.control.zoom({
         position: 'bottomright'
-      }).addTo(mapInstance);
+      }).addTo(map);
       
-      // Add attribution in a better position
-      L.control.attribution({
-        position: 'bottomleft'
-      }).addTo(mapInstance);
+      // Add satellite/streets toggle
+      const mapTypeControl = L.control({position: 'bottomleft'});
+      mapTypeControl.onAdd = () => {
+        const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar');
+        div.innerHTML = `
+          <button 
+            id="map-type-toggle" 
+            class="bg-white px-3 py-2 rounded-md shadow-md text-sm font-medium"
+            style="display: flex; align-items: center;"
+          >
+            <img 
+              src="/satellite.svg" 
+              alt="Toggle Satellite" 
+              style="width: 16px; height: 16px; margin-right: 6px;"
+            />
+            Satellite
+          </button>
+        `;
+        
+        div.onclick = () => {
+          setMapType(currentType => {
+            const newType = currentType === 'streets' ? 'satellite' : 'streets';
+            updateMapType(map, newType);
+            return newType;
+          });
+        };
+        
+        return div;
+      };
+      mapTypeControl.addTo(map);
       
-      // Add scale control
-      L.control.scale({
-        position: 'bottomleft'
-      }).addTo(mapInstance);
-
-      // Load Leaflet Routing Machine dynamically
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.min.js';
-      script.async = true;
-      document.head.appendChild(script);
+      // Save map instance to ref
+      mapRef.current = map;
     }
-    
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
+  }, [currentLocation]);
   
-  // Update map style
-  useEffect(() => {
-    const mapInstance = mapRef.current;
-    if (!mapInstance) return;
-    
-    // Remove existing layers
-    mapInstance.eachLayer((layer) => {
+  // Update map type (satellite or streets)
+  const updateMapType = (map: L.Map, type: 'streets' | 'satellite') => {
+    // Remove all existing tile layers
+    map.eachLayer((layer) => {
       if (layer instanceof L.TileLayer) {
-        mapInstance.removeLayer(layer);
+        map.removeLayer(layer);
       }
     });
     
-    // Add new tile layer based on style
-    if (mapStyle === 'streets') {
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      }).addTo(mapInstance);
-    } else if (mapStyle === 'satellite') {
+    // Add the appropriate tile layer
+    if (type === 'satellite') {
       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-      }).addTo(mapInstance);
+      }).addTo(map);
+      
+      // Update button text
+      const button = document.getElementById('map-type-toggle');
+      if (button) {
+        button.innerHTML = `
+          <img 
+            src="/map.svg" 
+            alt="Toggle Streets" 
+            style="width: 16px; height: 16px; margin-right: 6px;"
+          />
+          Streets
+        `;
+      }
+    } else {
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(map);
+      
+      // Update button text
+      const button = document.getElementById('map-type-toggle');
+      if (button) {
+        button.innerHTML = `
+          <img 
+            src="/satellite.svg" 
+            alt="Toggle Satellite" 
+            style="width: 16px; height: 16px; margin-right: 6px;"
+          />
+          Satellite
+        `;
+      }
     }
-  }, [mapStyle]);
+  };
   
-  // Update user marker when location changes
+  // Update current user location marker
   useEffect(() => {
-    const mapInstance = mapRef.current;
-    if (!mapInstance || !currentLocation) return;
+    if (!mapRef.current || !currentLocation) return;
     
     const { latitude, longitude } = currentLocation;
-    console.log('Updating map with user location:', { latitude, longitude, accuracy: currentLocation.accuracy });
+    const latLng = L.latLng(latitude, longitude);
     
-    // Check if the location is within Philippines bounds with some padding
-    const isWithinPhilippines = 
-      latitude >= PHILIPPINES_BOUNDS.south - 5 && 
-      latitude <= PHILIPPINES_BOUNDS.north + 5 && 
-      longitude >= PHILIPPINES_BOUNDS.west - 5 && 
-      longitude <= PHILIPPINES_BOUNDS.east + 5;
+    // Check if the location is within the Philippines bounds
+    if (!PH_BOUNDS.contains(latLng)) {
+      console.warn('Location outside Philippines bounds, defaulting to Manila');
+      return;
+    }
     
-    // If not within Philippines, use a default location (Manila)
-    const finalLat = isWithinPhilippines ? latitude : 14.5995;
-    const finalLng = isWithinPhilippines ? longitude : 120.9842;
-    
-    // Create or update user marker
-    if (markersRef.current['user']) {
-      markersRef.current['user'].setLatLng([finalLat, finalLng]);
-      markersRef.current['user'].setPopupContent(`
-        <div style="text-align: center; padding: 5px;">
-          <strong>${currentUser?.displayName || 'You'}</strong>
-          <p style="margin: 5px 0;">Last updated:<br>${new Date(currentLocation.timestamp).toLocaleTimeString()}</p>
-          ${currentLocation.accuracy ? `<p style="margin: 5px 0;">Accuracy: ${Math.round(currentLocation.accuracy)}m</p>` : ''}
-        </div>
-      `);
+    // Update current user marker
+    if (markersRef.current['currentUser']) {
+      markersRef.current['currentUser'].setLatLng([latitude, longitude]);
     } else {
-      // Get profile image URL or use default
-      const profileImageUrl = currentUser?.photoURL || 'https://api.dicebear.com/7.x/thumbs/svg?seed=' + (currentUser?.displayName || 'user');
+      // Create a profile marker for the current user
+      const userPhoto = 'https://api.dicebear.com/7.x/thumbs/svg?seed=currentUser';
+      const marker = L.marker([latitude, longitude], {
+        icon: createProfileMarker(userPhoto, 'You', false),
+        zIndexOffset: 1000
+      }).addTo(mapRef.current);
       
-      const marker = L.marker([finalLat, finalLng], { 
-        icon: createProfileMarker(profileImageUrl, 48, false)
-      })
-        .addTo(mapInstance)
-        .bindPopup(`
-          <div style="text-align: center; padding: 5px;">
-            <strong>${currentUser?.displayName || 'You'}</strong>
-            <p style="margin: 5px 0;">Last updated:<br>${new Date(currentLocation.timestamp).toLocaleTimeString()}</p>
-            ${currentLocation.accuracy ? `<p style="margin: 5px 0;">Accuracy: ${Math.round(currentLocation.accuracy)}m</p>` : ''}
-          </div>
-        `);
-      
-      markersRef.current['user'] = marker;
+      // Add to markers ref
+      markersRef.current['currentUser'] = marker;
     }
     
-    // Center map on user's location if no connection is selected
-    if (!selectedConnectionId) {
-      mapInstance.setView([finalLat, finalLng], 15);
+    // Center map on first location update
+    if (!mapRef.current.getCenter().equals([latitude, longitude])) {
+      mapRef.current.setView([latitude, longitude], DEFAULT_ZOOM);
     }
-    
-    // Update accuracy circle
-    if (currentLocation.accuracy) {
-      if (markersRef.current['accuracy']) {
-        mapInstance.removeLayer(markersRef.current['accuracy']);
-      }
-      
-      const circle = L.circle([finalLat, finalLng], {
-        radius: currentLocation.accuracy,
-        fill: true,
-        fillColor: '#3b82f6',
-        fillOpacity: 0.15,
-        stroke: true,
-        color: '#3b82f6',
-        weight: 1
-      }).addTo(mapInstance);
-      
-      markersRef.current['accuracy'] = circle as unknown as L.Marker;
-    }
-  }, [currentLocation, selectedConnectionId, currentUser]);
+  }, [currentLocation]);
   
-  // Update connection markers
+  // Helper function to create a simple route line
+  const createRouteLine = (from: L.LatLng, to: L.LatLng, map: L.Map) => {
+    // Create a polyline with decent styling that will be visible
+    const routeLine = L.polyline([from, to], {
+      color: '#0284c7',
+      weight: 5,
+      opacity: 0.7,
+      lineJoin: 'round',
+      dashArray: '10, 10',
+      zIndex: 900 // Ensure it stays on top
+    }).addTo(map);
+    
+    // Fit map bounds to include both points
+    map.fitBounds(L.latLngBounds([from, to]), {
+      padding: [50, 50] // Add padding around the bounds
+    });
+    
+    return routeLine;
+  };
+  
+  // Update connection markers and create route to selected connection
   useEffect(() => {
-    const mapInstance = mapRef.current;
-    if (!mapInstance) return;
+    if (!mapRef.current) return;
     
-    // Keep track of active connection IDs
-    const activeConnectionIds = new Set();
+    const map = mapRef.current;
     
-    connections.forEach(connection => {
-      if (!connection.location) return;
-      
-      const { latitude, longitude } = connection.location;
-      
-      // Check if the location is within Philippines bounds with some padding
-      const isWithinPhilippines = 
-        latitude >= PHILIPPINES_BOUNDS.south - 5 && 
-        latitude <= PHILIPPINES_BOUNDS.north + 5 && 
-        longitude >= PHILIPPINES_BOUNDS.west - 5 && 
-        longitude <= PHILIPPINES_BOUNDS.east + 5;
-      
-      // If not within Philippines, use a default location (Manila)
-      const finalLat = isWithinPhilippines ? latitude : 14.5995;
-      const finalLng = isWithinPhilippines ? longitude : 120.9842;
-      
-      const isSelected = connection.id === selectedConnectionId;
-      activeConnectionIds.add(connection.id);
-      
-      // Get profile image URL
-      let profileImageUrl = connection.photoURL;
-      if (!profileImageUrl) {
-        profileImageUrl = `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
+    // Remove existing routing control if it exists
+    if (routingControlRef.current) {
+      map.removeControl(routingControlRef.current);
+      routingControlRef.current = null;
+    }
+    
+    // Clear existing connection markers
+    Object.keys(markersRef.current).forEach(key => {
+      if (key !== 'currentUser') {
+        map.removeLayer(markersRef.current[key]);
+        delete markersRef.current[key];
       }
-      
-      // Create or update marker
-      if (markersRef.current[connection.id]) {
-        const marker = markersRef.current[connection.id];
-        marker.setLatLng([finalLat, finalLng]);
+    });
+    
+    // Add markers for connections with locations
+    allConnections.forEach(connection => {
+      if (connection.location) {
+        const { latitude, longitude } = connection.location;
+        const latLng = L.latLng(latitude, longitude);
         
-        // Update icon if selection state changed
-        marker.setIcon(createProfileMarker(profileImageUrl, 48, isSelected));
+        // Check if location is within bounds
+        if (!PH_BOUNDS.contains(latLng)) {
+          console.warn(`Connection ${connection.displayName} location outside Philippines bounds, skipping`);
+          return;
+        }
         
-        // Update popup content
-        marker.setPopupContent(`
-          <div style="text-align: center; padding: 5px;">
-            <strong>${connection.displayName}</strong>
-            <p style="margin: 5px 0;">Last updated:<br>${new Date(connection.location.timestamp).toLocaleString()}</p>
-          </div>
-        `);
-      } else {
-        // Create new marker
-        const marker = L.marker([finalLat, finalLng], {
-          icon: createProfileMarker(profileImageUrl, 48, isSelected)
-        })
-          .addTo(mapInstance)
-          .bindPopup(`
-            <div style="text-align: center; padding: 5px;">
-              <strong>${connection.displayName}</strong>
-              <p style="margin: 5px 0;">Last updated:<br>${new Date(connection.location.timestamp).toLocaleString()}</p>
-            </div>
-          `);
+        // Create profile image URL
+        const profileImageUrl = connection.photoURL || 
+          `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(connection.displayName)}`;
         
+        // Create marker with profile image
+        const isSelected = selectedConnectionId === connection.id;
+        const marker = L.marker([latitude, longitude], {
+          icon: createProfileMarker(profileImageUrl, connection.displayName, isSelected),
+          zIndexOffset: isSelected ? 2000 : 0
+        }).addTo(map);
+        
+        // Add tooltip
+        marker.bindTooltip(`${connection.displayName} - Last update: ${new Date(connection.location.timestamp).toLocaleTimeString()}`);
+        
+        // Store marker reference
         markersRef.current[connection.id] = marker;
       }
     });
     
-    // Remove markers for connections that no longer exist
-    Object.keys(markersRef.current).forEach(id => {
-      if (id !== 'user' && id !== 'accuracy' && !activeConnectionIds.has(id)) {
-        mapInstance.removeLayer(markersRef.current[id]);
-        delete markersRef.current[id];
-      }
-    });
-  }, [connections, selectedConnectionId]);
-  
-  // Update routing when selection changes
-  useEffect(() => {
-    const mapInstance = mapRef.current;
-    if (!mapInstance || !currentLocation) return;
-    
-    // Remove existing routing control
-    if (routingControlRef.current) {
-      if (routingControlRef.current.remove) {
-        mapInstance.removeControl(routingControlRef.current);
-      } else if (routingControlRef.current.removeFrom) {
-        routingControlRef.current.removeFrom(mapInstance);
-      }
-      routingControlRef.current = null;
-    }
-    
-    // If a connection is selected and has location, add routing
-    if (selectedConnectionId) {
-      const selectedConnection = connections.find(c => c.id === selectedConnectionId);
+    // If there's a selected connection with location, create a route
+    if (selectedConnectionId && currentLocation) {
+      const selectedConnection = allConnections.find(c => c.id === selectedConnectionId);
       
-      if (selectedConnection?.location && window.L.Routing) {
-        const userLatLng = L.latLng(currentLocation.latitude, currentLocation.longitude);
-        const connectionLatLng = L.latLng(
-          selectedConnection.location.latitude, 
-          selectedConnection.location.longitude
-        );
+      if (selectedConnection?.location) {
+        const { latitude: fromLat, longitude: fromLng } = currentLocation;
+        const { latitude: toLat, longitude: toLng } = selectedConnection.location;
         
-        try {
-          // Create routing control with improved options for mobile
-          const routingControl = window.L.Routing.control({
-            waypoints: [userLatLng, connectionLatLng],
-            routeWhileDragging: false,
-            showAlternatives: false,
-            fitSelectedRoutes: true,
-            show: false, // Don't show the instructions by default
-            lineOptions: {
-              styles: [{ color: '#3b82f6', opacity: 0.8, weight: 5 }],
-              extendToWaypoints: true,
-              missingRouteTolerance: 0
-            },
-            createMarker: () => null, // Don't create default markers
-            router: window.L.Routing.osrmv1({
-              serviceUrl: 'https://router.project-osrm.org/route/v1',
-              timeout: 5000
-            }),
-            collapsible: true,
-            position: 'topright'
-          }).addTo(mapInstance);
-          
-          // Ensure the route is always on top when zooming or panning
-          routingControl.on('routesfound', function() {
-            if (routingControl._route) {
-              // Bring route line to front
-              routingControl._line.bringToFront();
-            }
-          });
-          
-          // Move the routing control container for better visibility
-          setTimeout(() => {
-            try {
-              if (routingControl._container) {
-                routingControl._container.style.zIndex = "1000";
-                routingControl._container.style.display = "none"; // Hide initially
+        // Source and destination coordinates
+        const from = L.latLng(fromLat, fromLng);
+        const to = L.latLng(toLat, toLng);
+        
+        // Check if both points are within Philippines bounds
+        if (PH_BOUNDS.contains(from) && PH_BOUNDS.contains(to)) {
+          try {
+            // Create a new routing control
+            const routingControl = L.Routing.control({
+              waypoints: [from, to],
+              routeWhileDragging: false,
+              showAlternatives: false,
+              addWaypoints: false,
+              createMarker: () => null, // Don't create default markers
+              lineOptions: {
+                styles: [
+                  {color: '#0284c7', opacity: 0.8, weight: 6},
+                  {color: 'white', opacity: 0.3, weight: 2}
+                ],
+                extendToWaypoints: true,
+                missingRouteTolerance: 0
               }
-            } catch (e) {
-              console.error("Error adjusting routing control container:", e);
-            }
-          }, 500);
-          
-          routingControlRef.current = routingControl;
-        } catch (error) {
-          console.error("Error creating routing control:", error);
-          // Fallback to simple polyline if routing fails
-          createSimpleRouteLine(mapInstance, currentLocation, selectedConnection.location);
+            }).addTo(map);
+            
+            // Style the routing container for better mobile experience
+            setTimeout(() => {
+              const container = document.querySelector('.leaflet-routing-container');
+              if (container) {
+                (container as HTMLElement).style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+                (container as HTMLElement).style.width = '280px';
+                (container as HTMLElement).style.maxHeight = '300px';
+                (container as HTMLElement).style.overflowY = 'auto';
+                (container as HTMLElement).style.fontSize = '12px';
+                (container as HTMLElement).style.zIndex = '1000';
+              }
+            }, 500);
+            
+            // Store routing control reference
+            routingControlRef.current = routingControl;
+            
+            // If routing fails, create a simple line
+            routingControl.on('routingerror', () => {
+              console.warn('Routing failed, creating simple line instead');
+              createRouteLine(from, to, map);
+            });
+            
+            // Fit map bounds to include both points
+            map.fitBounds(L.latLngBounds([from, to]), {
+              padding: [50, 50]
+            });
+          } catch (error) {
+            console.error('Error creating route:', error);
+            // Fallback to simple line if routing fails
+            createRouteLine(from, to, map);
+          }
+        } else {
+          console.warn('Route endpoints outside Philippines bounds');
         }
-        
-        // Fit bounds with padding for mobile
-        mapInstance.fitBounds([
-          [currentLocation.latitude, currentLocation.longitude],
-          [selectedConnection.location.latitude, selectedConnection.location.longitude]
-        ], { 
-          padding: [50, 50] 
-        });
-      } else if (!window.L.Routing) {
-        // If routing library isn't loaded yet, use a simple line
-        createSimpleRouteLine(mapInstance, currentLocation, selectedConnection.location);
       }
     }
-  }, [currentLocation, connections, selectedConnectionId]);
+  }, [allConnections, selectedConnectionId, currentLocation]);
   
-  // Helper function to create a simple route line
-  const createSimpleRouteLine = (mapInstance, userLocation, connectionLocation) => {
-    if (!userLocation || !connectionLocation) return;
-    
-    const userLatLng = [userLocation.latitude, userLocation.longitude];
-    const connectionLatLng = [
-      connectionLocation.latitude, 
-      connectionLocation.longitude
-    ];
-    
-    // Create polyline with improved styling
-    const polyline = L.polyline([userLatLng, connectionLatLng], {
-      color: '#3b82f6',
-      weight: 5,
-      opacity: 0.8,
-      // Add additional styling to make it more visible
-      dashArray: null,
-      lineCap: 'round',
-      lineJoin: 'round',
-      zIndex: 1000 // Ensure high z-index
-    }).addTo(mapInstance);
-    
-    // Ensure it stays on top
-    polyline.bringToFront();
-    
-    routingControlRef.current = polyline;
-    
-    // Fit bounds to include both markers
-    mapInstance.fitBounds([
-      [userLocation.latitude, userLocation.longitude],
-      [connectionLocation.latitude, connectionLocation.longitude]
-    ], { 
-      padding: [50, 50] 
-    });
-  }
+  // Utility function to trigger location update
+  const handleRefreshLocation = () => {
+    onUpdateLocation();
+  };
   
   return (
-    <div className="h-full w-full relative">
-      <div id="map" className="h-full w-full z-0"></div>
+    <div className="relative w-full h-full">
+      <div ref={mapContainerRef} className="w-full h-full" />
       
-      {/* Map controls */}
-      <div className="absolute bottom-4 right-4 z-10 flex flex-col gap-2">
-        <button
-          onClick={async () => {
-            const location = await onUpdateLocation();
-            if (location && mapRef.current) {
-              console.log('Recentering map on updated location');
-              mapRef.current.setView([location.latitude, location.longitude], 16);
-              toast.success('Location updated');
-            }
-          }}
-          className="bg-card text-card-foreground shadow-md rounded-full p-3 hover:bg-accent"
-          title="Update your location and recenter map"
+      {/* Refresh location button */}
+      <button 
+        onClick={handleRefreshLocation}
+        className="absolute bottom-4 right-4 bg-white rounded-full p-3 shadow-md z-[1000]"
+        aria-label="Refresh location"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          viewBox="0 0 24 24" 
+          fill="none" 
+          stroke="currentColor" 
+          strokeWidth="2" 
+          strokeLinecap="round" 
+          strokeLinejoin="round" 
+          className="h-5 w-5"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <circle cx="12" cy="12" r="10" />
-            <circle cx="12" cy="12" r="1" />
-            <line x1="12" y1="9" x2="12" y2="2" />
-            <line x1="12" y1="22" x2="12" y2="15" />
-            <line x1="15" y1="12" x2="22" y2="12" />
-            <line x1="2" y1="12" x2="9" y2="12" />
-          </svg>
-        </button>
-        
-        {/* Toggle map style button */}
-        <button
-          onClick={() => setMapStyle(mapStyle === 'streets' ? 'satellite' : 'streets')}
-          className="bg-card text-card-foreground shadow-md rounded-full p-3 hover:bg-accent"
-          title={`Switch to ${mapStyle === 'streets' ? 'satellite' : 'streets'} view`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
-            <line x1="8" y1="2" x2="8" y2="18"></line>
-            <line x1="16" y1="6" x2="16" y2="22"></line>
-          </svg>
-        </button>
-        
-        {/* Toggle routing instructions button - only show when a connection is selected */}
-        {selectedConnectionId && routingControlRef.current && window.L.Routing && (
-          <button
-            onClick={() => {
-              if (routingControlRef.current._container.style.display === 'none') {
-                routingControlRef.current._container.style.display = 'block';
-              } else {
-                routingControlRef.current._container.style.display = 'none';
-              }
-            }}
-            className="bg-card text-card-foreground shadow-md rounded-full p-3 hover:bg-accent"
-            title="Toggle routing instructions"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-            </svg>
-          </button>
-        )}
-      </div>
+          <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c-2.85 0-5.485-.89-7.636-2.404M3 12a9 9 0 0 1 9-9m-9 9c0-2.85.89-5.485 2.404-7.636M12 3h9" />
+        </svg>
+      </button>
     </div>
   );
 } 

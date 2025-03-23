@@ -167,6 +167,7 @@ export default function Dashboard() {
         <Map
           currentLocation={currentLocation}
           connections={connections}
+          connectionRequests={connectionRequests.filter(req => req.status === 'accepted')}
           selectedConnectionId={selectedConnection}
           onUpdateLocation={updateLocation}
         />
