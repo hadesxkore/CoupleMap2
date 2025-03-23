@@ -13,7 +13,6 @@ import {
   addDoc,
   arrayUnion,
   Timestamp,
-  setDoc,
   serverTimestamp
 } from 'firebase/firestore';
 import { toast } from 'sonner';
@@ -275,9 +274,6 @@ export function LocationProvider({ children }: LocationProviderProps) {
         if (!fromUserDoc.exists() || !toUserDoc.exists()) {
           throw new Error('User data not found');
         }
-        
-        const fromUserData = fromUserDoc.data();
-        const toUserData = toUserDoc.data();
         
         // Add connection to sender's connections
         await updateDoc(fromUserRef, {

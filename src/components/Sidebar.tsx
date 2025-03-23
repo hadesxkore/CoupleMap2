@@ -41,7 +41,6 @@ export function Sidebar({
 }: SidebarProps) {
   const { respondToConnectionRequest } = useLocation();
   const [isMobile, setIsMobile] = useState(false);
-  const [userClosedSidebar, setUserClosedSidebar] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [connectionEditorOpen, setConnectionEditorOpen] = useState(false);
   const [selectedConnectionForEdit, setSelectedConnectionForEdit] = useState<ConnectionWithLocation | null>(null);
@@ -60,9 +59,8 @@ export function Sidebar({
     return () => window.removeEventListener('resize', checkIfMobile);
   }, []);
 
-  // Custom toggle handler to track user intent
+  // Custom toggle handler
   const handleToggle = () => {
-    setUserClosedSidebar(!isOpen);
     onToggle();
   };
 

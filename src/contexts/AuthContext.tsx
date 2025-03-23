@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { 
-  Auth, 
   User, 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword,
@@ -12,7 +11,7 @@ import {
   onAuthStateChanged
 } from 'firebase/auth';
 import { auth, db } from '../services/firebase';
-import { collection, doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { toast } from 'sonner';
 
 interface AuthProviderProps {
