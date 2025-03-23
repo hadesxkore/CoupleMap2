@@ -5,6 +5,8 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-routing-machine';
 import 'leaflet-routing-machine/dist/leaflet-routing-machine.css';
+// @ts-ignore - Import polyline decorator
+import 'leaflet-polylinedecorator';
 import { ConnectionWithLocation, ConnectionRequest } from '../contexts/LocationContext';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -415,8 +417,27 @@ export function Map({
       weight: 5,
       opacity: 0.7,
       lineJoin: 'round',
-      dashArray: '10, 10',
       zIndex: 900 // Ensure it stays on top
+    }).addTo(map);
+    
+    // Add directional arrow
+    const decorator = L.polylineDecorator(routeLine, {
+      patterns: [
+        {
+          offset: '50%', 
+          repeat: 0, 
+          symbol: L.Symbol.arrowHead({
+            pixelSize: 15,
+            polygon: false,
+            pathOptions: {
+              stroke: true,
+              weight: 3,
+              color: '#0284c7',
+              opacity: 0.8
+            }
+          })
+        }
+      ]
     }).addTo(map);
     
     // Fit map bounds to include both points
@@ -425,7 +446,7 @@ export function Map({
       animate: false // Disable animation for faster response
     });
     
-    return routeLine;
+    return { routeLine, decorator };
   };
   
   // Update connection markers and create route to selected connection
@@ -479,6 +500,9 @@ export function Map({
       }
     });
     
+    // Store for any manual routes created
+    let manualRoutes = [];
+    
     // If there's a selected connection with location, create a route
     if (selectedConnectionId && currentLocation) {
       const selectedConnection = allConnections.find(c => c.id === selectedConnectionId);
@@ -496,7 +520,8 @@ export function Map({
           try {
             // For mobile devices, use simpler routing to improve performance
             if (window.innerWidth < 768) {
-              createRouteLine(from, to, map);
+              const { routeLine, decorator } = createRouteLine(from, to, map);
+              manualRoutes.push({ line: routeLine, decorator });
             } else {
               // Create a new routing control for desktop
               const routingControl = L.Routing.control({
@@ -535,7 +560,8 @@ export function Map({
               // If routing fails, create a simple line
               routingControl.on('routingerror', () => {
                 console.warn('Routing failed, creating simple line instead');
-                createRouteLine(from, to, map);
+                const { routeLine, decorator } = createRouteLine(from, to, map);
+                manualRoutes.push({ line: routeLine, decorator });
               });
             }
             
@@ -547,13 +573,26 @@ export function Map({
           } catch (error) {
             console.error('Error creating route:', error);
             // Fallback to simple line if routing fails
-            createRouteLine(from, to, map);
+            const { routeLine, decorator } = createRouteLine(from, to, map);
+            manualRoutes.push({ line: routeLine, decorator });
           }
         } else {
           console.warn('Route endpoints outside Philippines bounds');
         }
       }
     }
+    
+    // Cleanup function to remove manual routes
+    return () => {
+      if (manualRoutes.length > 0) {
+        manualRoutes.forEach(route => {
+          if (map) {
+            if (route.line) map.removeLayer(route.line);
+            if (route.decorator) map.removeLayer(route.decorator);
+          }
+        });
+      }
+    };
   }, [allConnections, selectedConnectionId, currentLocation]);
   
   // Utility function to trigger location update
