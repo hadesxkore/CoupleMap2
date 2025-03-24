@@ -33,6 +33,7 @@ export interface ConnectionWithLocation {
   email: string;
   photoURL?: string | null;
   location: Location | null;
+  mood?: UserMood;
 }
 
 export interface ConnectionRequest {
@@ -43,6 +44,12 @@ export interface ConnectionRequest {
   toId: string;
   status: 'pending' | 'accepted' | 'rejected';
   timestamp: string;
+}
+
+export interface UserMood {
+  emoji: string;
+  text: string;
+  timestamp: number;
 }
 
 export interface LocationContextType {
@@ -59,6 +66,7 @@ export interface LocationContextType {
   updateConnectionNickname: (connectionId: string, nickname: string) => Promise<void>;
   updateConnectionPhoto: (connectionId: string, photoURL: string) => Promise<void>;
   removeConnection: (connectionId: string) => Promise<void>;
+  updateUserMood: (emoji: string, text: string) => Promise<void>;
 }
 
 interface LocationProviderProps {
@@ -85,23 +93,23 @@ export function LocationProvider({ children }: LocationProviderProps) {
   const [connectionRequests, setConnectionRequests] = useState<ConnectionRequest[]>([]);
   const [isTracking, setIsTracking] = useState(false);
   const [trackingInterval, setTrackingInterval] = useState<NodeJS.Timeout | null>(null);
-  
+
   // Get current location
   const updateLocation = async (): Promise<Location | undefined> => {
     if (!navigator.geolocation) {
       toast.error('Geolocation is not supported by your browser');
       return;
     }
-    
+
     try {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
+            enableHighAccuracy: true,
           timeout: 10000,
           maximumAge: 0
         });
       });
-      
+
       const { latitude, longitude, accuracy } = position.coords;
       
       // Format location data
@@ -111,10 +119,10 @@ export function LocationProvider({ children }: LocationProviderProps) {
         timestamp: new Date().toISOString(),
         accuracy
       };
-      
+
       // Update state
       setCurrentLocation(locationData);
-      
+
       // If user is logged in, update their location in Firestore
       if (currentUser) {
         const userDocRef = doc(db, 'users', currentUser.uid);
@@ -127,18 +135,18 @@ export function LocationProvider({ children }: LocationProviderProps) {
           }
         });
       }
-      
+
       return locationData;
     } catch (error: any) {
       if (error.code === 1) { // Permission denied
         toast.error('Location permission denied. Please enable location services.');
       } else {
         toast.error(`Error getting location: ${error.message}`);
-        console.error('Error getting location:', error);
+      console.error('Error getting location:', error);
       }
     }
   };
-  
+
   // Start tracking location at intervals
   const startTrackingLocation = () => {
     if (isTracking) return;
@@ -150,10 +158,10 @@ export function LocationProvider({ children }: LocationProviderProps) {
     const interval = setInterval(updateLocation, 60000); // Update every minute
     setTrackingInterval(interval);
     setIsTracking(true);
-    
+
     toast.success('Location tracking started');
   };
-  
+
   // Stop tracking location
   const stopTrackingLocation = () => {
     if (trackingInterval) {
@@ -239,7 +247,7 @@ export function LocationProvider({ children }: LocationProviderProps) {
       throw error;
     }
   };
-  
+
   // Respond to connection request
   const respondToConnectionRequest = async (requestId: string, accept: boolean) => {
     if (!currentUser) {
@@ -341,7 +349,7 @@ export function LocationProvider({ children }: LocationProviderProps) {
       throw error;
     }
   };
-  
+
   // Search users by email
   const searchUsersByEmail = async (email: string): Promise<{id: string, email: string, displayName: string}[]> => {
     if (!currentUser) {
@@ -500,7 +508,7 @@ export function LocationProvider({ children }: LocationProviderProps) {
       setCurrentLocation(null);
       return;
     }
-    
+
     const userRef = doc(db, 'users', currentUser.uid);
     
     // Listen for user document changes
@@ -605,7 +613,7 @@ export function LocationProvider({ children }: LocationProviderProps) {
       
       setConnectionRequests(requests);
     });
-    
+
     return () => {
       unsubscribeUser();
       unsubscribeRequests();
@@ -712,6 +720,39 @@ export function LocationProvider({ children }: LocationProviderProps) {
     }
   };
   
+  /**
+   * Update user's mood/status
+   */
+  const updateUserMood = async (emoji: string, text: string) => {
+    if (!currentUser) {
+      toast.error('You must be logged in to update your status');
+      return;
+    }
+
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const mood: UserMood = {
+        emoji,
+        text,
+        timestamp: Date.now(),
+      };
+
+      await updateDoc(userRef, {
+        mood,
+      });
+
+      // Update local state
+      setConnections(prev => prev.map(conn =>
+        conn.id === currentUser.uid ? { ...conn, mood } : conn
+      ));
+      toast.success('Status updated successfully');
+    } catch (error) {
+      console.error('Error updating mood:', error);
+      toast.error('Failed to update status');
+      throw error;
+    }
+  };
+  
   const value = {
     currentLocation,
     connections,
@@ -725,9 +766,10 @@ export function LocationProvider({ children }: LocationProviderProps) {
     searchUsersByEmail,
     updateConnectionNickname,
     updateConnectionPhoto,
-    removeConnection
+    removeConnection,
+    updateUserMood
   };
-  
+
   return (
     <LocationContext.Provider value={value}>
       {children}

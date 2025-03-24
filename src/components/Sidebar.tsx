@@ -12,6 +12,7 @@ import { ConnectionProfileEditor } from './ConnectionProfileEditor';
 import { cn } from '../lib/utils';
 import { ConnectionEdit } from './ConnectionEdit';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
+import { MoodSelector } from './MoodSelector';
 
 export interface SidebarProps {
   user: User | null;
@@ -50,6 +51,7 @@ export function Sidebar({
   const [editOpen, setEditOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [connectionToDelete, setConnectionToDelete] = useState<ConnectionWithLocation | null>(null);
+  const [moodSelectorOpen, setMoodSelectorOpen] = useState(false);
   
   // Filter requests by status
   const pendingRequests = connectionRequests.filter(req => req.status === 'pending');
@@ -279,7 +281,50 @@ export function Sidebar({
                   {user.email}
                 </p>
               )}
+              
+              {/* Display user's current mood if available */}
+              {connections.length > 0 && connections.find(c => c.id === user?.uid)?.mood && (
+                <div className="flex items-center mt-1 text-xs">
+                  <span className="mr-1">
+                    {connections.find(c => c.id === user?.uid)?.mood?.emoji}
+                  </span>
+                  <span className="text-muted-foreground truncate">
+                    {connections.find(c => c.id === user?.uid)?.mood?.text}
+                  </span>
+                </div>
+              )}
             </div>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="h-8 w-8 mr-1" 
+              onClick={() => setMoodSelectorOpen(true)}
+              title="Set Status"
+            >
+              {connections.length > 0 && connections.find(c => c.id === user?.uid)?.mood ? (
+                <span className="text-lg">
+                  {connections.find(c => c.id === user?.uid)?.mood?.emoji}
+                </span>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                >
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                  <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                  <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                </svg>
+              )}
+            </Button>
             <Button 
               variant="ghost" 
               size="icon" 
@@ -408,6 +453,13 @@ export function Sidebar({
                                 : 'Offline'}
                             </p>
                           </div>
+                          {/* Display connection mood if available */}
+                          {connection.mood && (
+                            <div className="flex items-center mt-1 text-xs">
+                              <span className="mr-1">{connection.mood.emoji}</span>
+                              <span className="truncate">{connection.mood.text}</span>
+                            </div>
+                          )}
                         </div>
                         <div className="flex space-x-1">
                           <Button
@@ -690,6 +742,12 @@ export function Sidebar({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      
+      {/* Mood Selector */}
+      <MoodSelector 
+        open={moodSelectorOpen} 
+        onOpenChange={setMoodSelectorOpen} 
+      />
     </>
   );
 } 

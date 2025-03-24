@@ -51,12 +51,56 @@ const DEFAULT_CENTER = [14.5995, 120.9842];
 const DEFAULT_ZOOM = 13;
 
 // Create a custom icon with the user's profile image
-const createProfileMarker = (profileImageUrl: string, userName: string, isSelected: boolean) => {
+const createProfileMarker = (profileImageUrl: string, userName: string, isSelected: boolean, mood?: UserMood) => {
   const iconSize = isSelected ? 50 : 40;
+  
+  // Show mood emoji if available - positioned separately above the marker
+  let moodHtml = '';
+  if (mood) {
+    moodHtml = `
+      <div style="
+        position: absolute;
+        top: -45px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: white;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 3px solid ${isSelected ? '#0284c7' : '#3b82f6'};
+        box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+        font-size: 22px;
+        z-index: 1001;
+        animation: floatAndPulse 3s ease-in-out infinite;
+      ">
+        ${mood.emoji}
+      </div>
+      <style>
+        @keyframes floatAndPulse {
+          0% { 
+            transform: translateX(-50%) translateY(0px) scale(1); 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+          }
+          50% { 
+            transform: translateX(-50%) translateY(-8px) scale(1.1); 
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+          }
+          100% { 
+            transform: translateX(-50%) translateY(0px) scale(1); 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+          }
+        }
+      </style>
+    `;
+  }
   
   return L.divIcon({
     className: 'custom-profile-marker',
     html: `
+      ${moodHtml}
       <div style="
         width: ${iconSize}px;
         height: ${iconSize}px;
@@ -65,6 +109,7 @@ const createProfileMarker = (profileImageUrl: string, userName: string, isSelect
         border: 4px solid ${isSelected ? '#0284c7' : 'white'};
         box-shadow: 0 3px 14px rgba(0,0,0,0.4);
         transition: all 0.3s ease;
+        position: relative;
       ">
         <img 
           src="${profileImageUrl}" 
@@ -90,8 +135,8 @@ const createProfileMarker = (profileImageUrl: string, userName: string, isSelect
       ">${userName}</div>
     `,
     iconSize: [iconSize, iconSize],
-    iconAnchor: [iconSize/2, iconSize + 15],
-    popupAnchor: [0, -iconSize - 15]
+    iconAnchor: [iconSize/2, mood ? (iconSize + 15) : (iconSize + 15)],
+    popupAnchor: [0, mood ? -iconSize - 45 : -iconSize - 15]
   });
 };
 
@@ -465,20 +510,54 @@ export function Map({
     // Update current user marker
     if (markersRef.current['currentUser']) {
       markersRef.current['currentUser'].setLatLng([latitude, longitude]);
+      
+      // Update the icon if needed for mood changes
+      const userMood = connections.find(c => c.id === currentUser?.uid)?.mood;
+      const userPhoto = currentUser?.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${currentUser?.displayName || 'You'}`;
+      markersRef.current['currentUser'].setIcon(createProfileMarker(userPhoto, 'You', false, userMood));
     } else {
       // Create a profile marker for the current user
       const userPhoto = currentUser?.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${currentUser?.displayName || 'You'}`;
+      const userMood = connections.find(c => c.id === currentUser?.uid)?.mood;
+      
       const marker = L.marker([latitude, longitude], {
-        icon: createProfileMarker(userPhoto, 'You', false),
+        icon: createProfileMarker(userPhoto, 'You', false, userMood),
         zIndexOffset: 1000
       }).addTo(mapRef.current);
       
       // Add click event to open message modal
       marker.on('click', () => {
-        setMessageModalOpen(true);
-        // When clicking own marker, target the selected connection if any
-        setMessageTargetId(selectedConnectionId);
+        // Display mood popup if user has a mood set
+        if (userMood) {
+          const moodTimestamp = new Date(userMood.timestamp).toLocaleString();
+          const popupContent = `
+            <div style="padding: 12px; text-align: center;">
+              <div style="font-size: 32px; margin-bottom: 8px;">${userMood.emoji}</div>
+              <div style="font-weight: bold; font-size: 16px;">${userMood.text}</div>
+              <div style="font-size: 12px; color: #666; margin-top: 8px;">Set ${moodTimestamp}</div>
+            </div>
+          `;
+          marker.bindPopup(popupContent, { 
+            className: 'mood-popup',
+            closeButton: true,
+            autoClose: false,
+            closeOnEscapeKey: true,
+            closeOnClick: false,
+          }).openPopup();
+        } else {
+          // Otherwise open message modal
+          setMessageModalOpen(true);
+          // When clicking own marker, target the selected connection if any
+          setMessageTargetId(selectedConnectionId);
+        }
       });
+      
+      // Add tooltip with mood if available
+      if (userMood) {
+        let tooltipContent = `You - Last update: ${new Date(currentLocation.timestamp).toLocaleTimeString()}`;
+        tooltipContent += `<br/><div style="font-size: 16px; margin-top: 5px; display: flex; align-items: center;"><span style="font-size: 20px; margin-right: 5px;">${userMood.emoji}</span> <strong>${userMood.text}</strong></div>`;
+        marker.bindTooltip(tooltipContent, { permanent: false, direction: 'top', opacity: 0.95 });
+      }
       
       // Add to markers ref
       markersRef.current['currentUser'] = marker;
@@ -522,7 +601,7 @@ export function Map({
     if (tileError && mapRef.current) {
       createTileLayer(mapRef.current, mapType);
     }
-  }, [currentLocation, currentUser, tileError, mapType, activeMessage, selectedConnectionId]);
+  }, [currentLocation, currentUser, tileError, mapType, activeMessage, selectedConnectionId, connections]);
   
   // Load user's active message from Firestore
   useEffect(() => {
@@ -658,13 +737,41 @@ export function Map({
       // Create or update marker
       if (markersRef.current[connection.id]) {
         markersRef.current[connection.id].setLatLng([latitude, longitude]);
-      } else {
+        } else {
         const profilePic = connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
         
         const marker = L.marker([latitude, longitude], {
-          icon: createProfileMarker(profilePic, connection.displayName, connection.id === selectedConnectionId),
+          icon: createProfileMarker(profilePic, connection.displayName, connection.id === selectedConnectionId, connection.mood),
           zIndexOffset: connection.id === selectedConnectionId ? 900 : 800
         }).addTo(map);
+        
+        // Add tooltip and mood information if available
+        let tooltipContent = `${connection.displayName} - Last update: ${new Date(connection.location.timestamp).toLocaleTimeString()}`;
+        if (connection.mood) {
+          tooltipContent += `<br/><div style="font-size: 16px; margin-top: 5px; display: flex; align-items: center;"><span style="font-size: 20px; margin-right: 5px;">${connection.mood.emoji}</span> <strong>${connection.mood.text}</strong></div>`;
+        }
+        marker.bindTooltip(tooltipContent, { permanent: false, direction: 'top', opacity: 0.95 });
+        
+        // Make all markers clickable to show mood popup
+        marker.on('click', () => {
+          if (connection.mood) {
+            const moodTimestamp = new Date(connection.mood.timestamp).toLocaleString();
+            const popupContent = `
+              <div style="padding: 12px; text-align: center;">
+                <div style="font-size: 32px; margin-bottom: 8px;">${connection.mood.emoji}</div>
+                <div style="font-weight: bold; font-size: 16px;">${connection.mood.text}</div>
+                <div style="font-size: 12px; color: #666; margin-top: 8px;">Set ${moodTimestamp}</div>
+              </div>
+            `;
+            marker.bindPopup(popupContent, { 
+              className: 'mood-popup',
+              closeButton: true,
+              autoClose: false,
+              closeOnEscapeKey: true,
+              closeOnClick: false,
+            }).openPopup();
+          }
+        });
         
         // Add to markers ref
         markersRef.current[connection.id] = marker;
@@ -674,13 +781,13 @@ export function Map({
       if (connection.id === selectedConnectionId) {
         const profilePic = connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
         markersRef.current[connection.id].setIcon(
-          createProfileMarker(profilePic, connection.displayName, true)
+          createProfileMarker(profilePic, connection.displayName, true, connection.mood)
         );
         markersRef.current[connection.id].setZIndexOffset(900);
       } else {
         const profilePic = connection.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${connection.displayName}`;
         markersRef.current[connection.id].setIcon(
-          createProfileMarker(profilePic, connection.displayName, false)
+          createProfileMarker(profilePic, connection.displayName, false, connection.mood)
         );
         markersRef.current[connection.id].setZIndexOffset(800);
       }
@@ -782,12 +889,16 @@ export function Map({
         // Create marker with profile image
         const isSelected = selectedConnectionId === connection.id;
         const marker = L.marker([latitude, longitude], {
-          icon: createProfileMarker(profileImageUrl, connection.displayName, isSelected),
+          icon: createProfileMarker(profileImageUrl, connection.displayName, isSelected, connection.mood),
           zIndexOffset: isSelected ? 2000 : 0
         }).addTo(map);
         
-        // Add tooltip
-        marker.bindTooltip(`${connection.displayName} - Last update: ${new Date(connection.location.timestamp).toLocaleTimeString()}`);
+        // Add tooltip and mood information if available
+        let tooltipContent = `${connection.displayName} - Last update: ${new Date(connection.location.timestamp).toLocaleTimeString()}`;
+        if (connection.mood) {
+          tooltipContent += `<br/><div style="font-size: 16px; margin-top: 5px; display: flex; align-items: center;"><span style="font-size: 20px; margin-right: 5px;">${connection.mood.emoji}</span> <strong>${connection.mood.text}</strong></div>`;
+        }
+        marker.bindTooltip(tooltipContent, { permanent: false, direction: 'top', opacity: 0.95 });
         
         // Store marker reference
         markersRef.current[connection.id] = marker;
@@ -1038,7 +1149,7 @@ export function Map({
                 )}
                 
                 <div className="flex justify-end space-x-2 pt-2">
-                  <button
+        <button
                     onClick={() => {
                       setMessageModalOpen(false);
                       setMessageTargetId(null);
@@ -1078,8 +1189,8 @@ export function Map({
           className="h-5 w-5"
         >
           <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c-2.85 0-5.485-.89-7.636-2.404M3 12a9 9 0 0 1 9-9m-9 9c0-2.85.89-5.485 2.404-7.636M12 3h9" />
-        </svg>
-      </button>
+          </svg>
+        </button>
       
       {/* Add message styles */}
       <style jsx global>{`
@@ -1107,6 +1218,23 @@ export function Map({
         
         .message-popup .leaflet-popup-close-button:hover {
           color: white;
+        }
+        
+        .mood-popup .leaflet-popup-content-wrapper {
+          background: white;
+          color: black;
+          border-radius: 20px;
+          padding: 0;
+          box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+        }
+        
+        .mood-popup .leaflet-popup-content {
+          margin: 8px 8px;
+          line-height: 1.4;
+        }
+        
+        .mood-popup .leaflet-popup-tip {
+          background: white;
         }
         
         .message-bubble {

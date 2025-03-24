@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ensure Leaflet styles are loaded */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.leaflet-div-icon {
+  background: transparent;
+  border: none;
+}
+
+/* Fix map container in mobile */
+.leaflet-container {
+  position: absolute !important;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+/* Improve tile loading performance */
+.leaflet-tile {
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+}
+
+/* Custom marker styles */
+.custom-profile-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Ensure popups are above other elements */
+.leaflet-popup {
+  z-index: 1000;
+}
+
+/* Routing machine styles */
+.leaflet-routing-container {
+  display: none !important; /* Hide the instructions panel */
+}
+
+.leaflet-routing-alt {
+  display: none !important;
+}
+
+.leaflet-routing-container-hide {
+  display: none !important;
+}
+
+/* Route line styles */
+.leaflet-routing-line {
+  stroke-width: 6;
+  stroke: #0284c7;
+  stroke-opacity: 0.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+/* ... rest of your existing styles ... */ 
