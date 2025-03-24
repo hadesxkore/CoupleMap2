@@ -10,7 +10,7 @@ import 'leaflet-polylinedecorator';
 import { ConnectionWithLocation, ConnectionRequest } from '../contexts/LocationContext';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
-import { getFirestore, doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 
 // Fix Leaflet marker icon issue
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
@@ -57,6 +57,7 @@ const createProfileMarker = (profileImageUrl: string, userName: string, isSelect
   // Show mood emoji if available - positioned separately above the marker
   let moodHtml = '';
   if (mood) {
+    console.log(`DEBUG - Creating marker with mood for ${userName}:`, mood);
     moodHtml = `
       <div style="
         position: absolute;
@@ -70,13 +71,13 @@ const createProfileMarker = (profileImageUrl: string, userName: string, isSelect
         display: flex;
         align-items: center;
         justify-content: center;
-        border: 3px solid ${isSelected ? '#0284c7' : '#3b82f6'};
-        box-shadow: 0 4px 10px rgba(0,0,0,0.4);
         font-size: 22px;
         z-index: 1001;
+        border: 3px solid ${isSelected ? '#0284c7' : '#3b82f6'};
+        box-shadow: 0 4px 10px rgba(0,0,0,0.4);
         animation: floatAndPulse 3s ease-in-out infinite;
       ">
-        ${mood.emoji}
+        ${mood.emoji || '😊'}
       </div>
       <style>
         @keyframes floatAndPulse {
@@ -135,8 +136,8 @@ const createProfileMarker = (profileImageUrl: string, userName: string, isSelect
       ">${userName}</div>
     `,
     iconSize: [iconSize, iconSize],
-    iconAnchor: [iconSize/2, mood ? (iconSize + 15) : (iconSize + 15)],
-    popupAnchor: [0, mood ? -iconSize - 45 : -iconSize - 15]
+    iconAnchor: [iconSize/2, iconSize + 15],
+    popupAnchor: [0, -90]  // Fixed position for popup to appear above the marker
   });
 };
 
@@ -162,6 +163,23 @@ declare module 'leaflet' {
   }
 }
 
+// Create a responsive popup template that's more compact and guaranteed to display
+const createMoodPopupContent = (emoji, text, timestamp, name, lastActiveTime) => {
+  return `
+    <div style="padding: 12px; text-align: center; width: 100%;">
+      <div style="font-size: 32px; margin-bottom: 8px;">${emoji}</div>
+      <div style="font-weight: bold; font-size: 16px; margin-bottom: 6px;">${text}</div>
+      <div style="border-top: 1px solid #eee; margin-top: 8px; padding-top: 8px;">
+        <div style="font-size: 12px; color: #666;">
+          <strong>${name}</strong><br/>
+          Status: ${timestamp.split(',')[0]}<br/>
+          Active: ${lastActiveTime.split(',')[0]}
+        </div>
+      </div>
+    </div>
+  `;
+};
+
 export function Map({ 
   currentLocation, 
   connections, 
@@ -183,6 +201,132 @@ export function Map({
   const [connectionMessages, setConnectionMessages] = useState<{[userId: string]: string}>({});
   const [messageTargetId, setMessageTargetId] = useState<string | null>(null);
   const { currentUser } = useAuth();
+  
+  // Replace the custom popup state and function with a simpler more reliable approach
+  // Add a state for selected connection info for the modal
+  const [selectedConnectionInfo, setSelectedConnectionInfo] = useState<{
+    id: string;
+    displayName: string;
+    lastActive: string;
+    hasMood: boolean;
+    mood?: {
+      emoji: string;
+      text: string;
+      timestamp: string;
+    };
+    formattedMood: string;
+    freshMood?: {
+      emoji: string;
+      text: string;
+      timestamp: string;
+    };
+  } | null>(null);
+  
+  // Replace the showCustomPopup function with a function to show the connection info modal
+  const showConnectionInfo = (connection) => {
+    console.log("DEBUG - Showing info for connection:", connection);
+    console.log("DEBUG - Connection mood:", connection.mood);
+    
+    // Check if the user clicked on their own marker
+    if (currentUser && connection.id === currentUser.uid) {
+      console.log("DEBUG - User clicked their own marker, showing message modal");
+      setMessageModalOpen(true);
+      return;
+    }
+    
+    // Get the connection data from the latest connections array
+    // This ensures we have the most up-to-date mood info
+    const latestConnectionData = connections.find(c => c.id === connection.id) || connection;
+    console.log("DEBUG - Latest connection data:", latestConnectionData);
+    
+    // Attempt to fetch the latest mood data directly from Firestore
+    const fetchLatestMood = async () => {
+      try {
+        const db = getFirestore();
+        const userRef = doc(db, 'users', connection.userId);
+        const userDoc = await getDoc(userRef);
+        
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          console.log("DEBUG - Fresh Firestore data for user:", userData);
+          
+          if (userData.mood) {
+            console.log("DEBUG - Found fresh mood data:", userData.mood);
+            
+            // Create a formatted mood string with the fresh data
+            let moodText = '';
+            if (userData.mood.emoji) moodText += userData.mood.emoji + ' ';
+            if (userData.mood.text) moodText += userData.mood.text;
+            
+            // Add timestamp if available
+            if (userData.mood.timestamp) {
+              const timestamp = new Date(userData.mood.timestamp);
+              moodText += ` (${timestamp.toLocaleString()})`;
+            }
+            
+            console.log("DEBUG - Formatted fresh mood:", moodText);
+            
+            // Set the modal with fresh data
+            setSelectedConnectionInfo({
+              ...latestConnectionData,
+              freshMood: userData.mood,
+              formattedMood: moodText
+            });
+            
+            // Also update the marker with this fresh mood data if it exists
+            if (markersRef.current[connection.id] && mapRef.current) {
+              const profilePic = latestConnectionData.photoURL || 
+                `https://api.dicebear.com/7.x/thumbs/svg?seed=${latestConnectionData.displayName}`;
+              
+              // Update marker with fresh mood data
+              const isSelected = connection.id === selectedConnectionId;
+              markersRef.current[connection.id].setIcon(
+                createProfileMarker(profilePic, latestConnectionData.displayName, isSelected, userData.mood)
+              );
+              
+              console.log("DEBUG - Updated marker with fresh mood data:", userData.mood);
+            }
+            
+            return; // We've handled the mood with fresh data
+          }
+        }
+        
+        // Fall back to existing data if fresh fetch fails
+        fallbackMoodFormat();
+        
+      } catch (error) {
+        console.error("Error fetching fresh mood data:", error);
+        fallbackMoodFormat();
+      }
+    };
+    
+    // Fallback to use the data we already have
+    const fallbackMoodFormat = () => {
+      // Create a formatted mood string
+      let moodInfo = 'No status';
+      if (latestConnectionData.mood && (latestConnectionData.mood.emoji || latestConnectionData.mood.text)) {
+        moodInfo = '';
+        if (latestConnectionData.mood.emoji) moodInfo += latestConnectionData.mood.emoji + ' ';
+        if (latestConnectionData.mood.text) moodInfo += latestConnectionData.mood.text;
+        
+        // Add timestamp if available
+        if (latestConnectionData.mood.timestamp) {
+          const timestamp = new Date(latestConnectionData.mood.timestamp);
+          moodInfo += ` (${timestamp.toLocaleString()})`;
+        }
+      }
+      
+      console.log("DEBUG - Formatted mood (fallback):", moodInfo);
+      
+      setSelectedConnectionInfo({
+        ...latestConnectionData,
+        formattedMood: moodInfo
+      });
+    };
+    
+    // Fetch the latest mood data
+    fetchLatestMood();
+  };
   
   // Get Firestore reference
   const db = getFirestore();
@@ -507,6 +651,8 @@ export function Map({
       return;
     }
     
+    let marker; // Declare the marker variable at this scope so it's accessible throughout the useEffect
+
     // Update current user marker
     if (markersRef.current['currentUser']) {
       markersRef.current['currentUser'].setLatLng([latitude, longitude]);
@@ -515,49 +661,39 @@ export function Map({
       const userMood = connections.find(c => c.id === currentUser?.uid)?.mood;
       const userPhoto = currentUser?.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${currentUser?.displayName || 'You'}`;
       markersRef.current['currentUser'].setIcon(createProfileMarker(userPhoto, 'You', false, userMood));
+      
+      // Update the click handler
+      marker = markersRef.current['currentUser'];
+      marker.off('click');
+      marker.on('click', () => {
+        const currentUserConnection = connections.find(c => c.id === currentUser?.uid);
+        if (currentUserConnection) {
+          showConnectionInfo(currentUserConnection);
+        } else {
+          // If we don't have a connection object for the current user, just open the message modal
+          setMessageModalOpen(true);
+        }
+      });
     } else {
       // Create a profile marker for the current user
       const userPhoto = currentUser?.photoURL || `https://api.dicebear.com/7.x/thumbs/svg?seed=${currentUser?.displayName || 'You'}`;
       const userMood = connections.find(c => c.id === currentUser?.uid)?.mood;
       
-      const marker = L.marker([latitude, longitude], {
+      marker = L.marker([latitude, longitude], {
         icon: createProfileMarker(userPhoto, 'You', false, userMood),
         zIndexOffset: 1000
       }).addTo(mapRef.current);
       
-      // Add click event to open message modal
+      // Add click event to show mood popup or message modal
       marker.on('click', () => {
-        // Display mood popup if user has a mood set
-        if (userMood) {
-          const moodTimestamp = new Date(userMood.timestamp).toLocaleString();
-          const popupContent = `
-            <div style="padding: 12px; text-align: center;">
-              <div style="font-size: 32px; margin-bottom: 8px;">${userMood.emoji}</div>
-              <div style="font-weight: bold; font-size: 16px;">${userMood.text}</div>
-              <div style="font-size: 12px; color: #666; margin-top: 8px;">Set ${moodTimestamp}</div>
-            </div>
-          `;
-          marker.bindPopup(popupContent, { 
-            className: 'mood-popup',
-            closeButton: true,
-            autoClose: false,
-            closeOnEscapeKey: true,
-            closeOnClick: false,
-          }).openPopup();
+        const currentUserConnection = connections.find(c => c.id === currentUser?.uid);
+        if (currentUserConnection) {
+          showConnectionInfo(currentUserConnection);
         } else {
-          // Otherwise open message modal
+          // If we don't have a connection object for the current user, just open the message modal
           setMessageModalOpen(true);
-          // When clicking own marker, target the selected connection if any
-          setMessageTargetId(selectedConnectionId);
         }
       });
-      
-      // Add tooltip with mood if available
-      if (userMood) {
-        let tooltipContent = `You - Last update: ${new Date(currentLocation.timestamp).toLocaleTimeString()}`;
-        tooltipContent += `<br/><div style="font-size: 16px; margin-top: 5px; display: flex; align-items: center;"><span style="font-size: 20px; margin-right: 5px;">${userMood.emoji}</span> <strong>${userMood.text}</strong></div>`;
-        marker.bindTooltip(tooltipContent, { permanent: false, direction: 'top', opacity: 0.95 });
-      }
       
       // Add to markers ref
       markersRef.current['currentUser'] = marker;
@@ -703,24 +839,17 @@ export function Map({
     
     const marker = markersRef.current[connectionId];
     
-    // Create or update popup with message
-    const popup = L.popup({
-      className: 'message-popup',
-      closeButton: true,
-      autoClose: false,
-      closeOnEscapeKey: true,
-      closeOnClick: false,
-      offset: [0, -50]
-    })
-    .setLatLng(marker.getLatLng())
-    .setContent(`
-      <div class="message-bubble">
-        <p>${message}</p>
+    // Create message popup content
+    const popupContent = `
+      <div style="padding: 12px; text-align: center;">
+        <div class="message-bubble">
+          <p style="margin: 0; font-size: 14px;">${message}</p>
+        </div>
       </div>
-    `);
+    `;
     
-    marker.bindPopup(popup);
-    marker.openPopup();
+    // Use our custom popup
+    showConnectionInfo(connections.find(c => c.id === connectionId));
   };
   
   // Update markers for connections and show their messages if available
@@ -745,32 +874,9 @@ export function Map({
           zIndexOffset: connection.id === selectedConnectionId ? 900 : 800
         }).addTo(map);
         
-        // Add tooltip and mood information if available
-        let tooltipContent = `${connection.displayName} - Last update: ${new Date(connection.location.timestamp).toLocaleTimeString()}`;
-        if (connection.mood) {
-          tooltipContent += `<br/><div style="font-size: 16px; margin-top: 5px; display: flex; align-items: center;"><span style="font-size: 20px; margin-right: 5px;">${connection.mood.emoji}</span> <strong>${connection.mood.text}</strong></div>`;
-        }
-        marker.bindTooltip(tooltipContent, { permanent: false, direction: 'top', opacity: 0.95 });
-        
-        // Make all markers clickable to show mood popup
+        // Add click handler to show profile information popup
         marker.on('click', () => {
-          if (connection.mood) {
-            const moodTimestamp = new Date(connection.mood.timestamp).toLocaleString();
-            const popupContent = `
-              <div style="padding: 12px; text-align: center;">
-                <div style="font-size: 32px; margin-bottom: 8px;">${connection.mood.emoji}</div>
-                <div style="font-weight: bold; font-size: 16px;">${connection.mood.text}</div>
-                <div style="font-size: 12px; color: #666; margin-top: 8px;">Set ${moodTimestamp}</div>
-              </div>
-            `;
-            marker.bindPopup(popupContent, { 
-              className: 'mood-popup',
-              closeButton: true,
-              autoClose: false,
-              closeOnEscapeKey: true,
-              closeOnClick: false,
-            }).openPopup();
-          }
+          showConnectionInfo(connection);
         });
         
         // Add to markers ref
@@ -893,12 +999,10 @@ export function Map({
           zIndexOffset: isSelected ? 2000 : 0
         }).addTo(map);
         
-        // Add tooltip and mood information if available
-        let tooltipContent = `${connection.displayName} - Last update: ${new Date(connection.location.timestamp).toLocaleTimeString()}`;
-        if (connection.mood) {
-          tooltipContent += `<br/><div style="font-size: 16px; margin-top: 5px; display: flex; align-items: center;"><span style="font-size: 20px; margin-right: 5px;">${connection.mood.emoji}</span> <strong>${connection.mood.text}</strong></div>`;
-        }
-        marker.bindTooltip(tooltipContent, { permanent: false, direction: 'top', opacity: 0.95 });
+        // Add click handler to show profile information popup
+        marker.on('click', () => {
+          showConnectionInfo(connection);
+        });
         
         // Store marker reference
         markersRef.current[connection.id] = marker;
@@ -1050,10 +1154,110 @@ export function Map({
     }
   };
   
+  // Add this debugger function
+  const debugMood = (connectionId, mood) => {
+    console.log(`DEBUG - Connection ID: ${connectionId}`);
+    console.log(`DEBUG - Has mood: ${!!mood}`);
+    if (mood) {
+      console.log(`DEBUG - Mood emoji: ${mood.emoji}`);
+      console.log(`DEBUG - Mood text: ${mood.text}`);
+      console.log(`DEBUG - Mood timestamp: ${mood.timestamp}`);
+    }
+  };
+  
+  // Update the locationContext useEffect to add deeper debugging and fix mood data
+  useEffect(() => {
+    // Log all connections to check if mood data is present
+    console.log("DEBUG - ALL CONNECTIONS:", connections);
+    connections.forEach((connection, index) => {
+      console.log(`DEBUG - CONNECTION ${index}:`, {
+        id: connection.id,
+        displayName: connection.displayName,
+        mood: connection.mood ? {
+          emoji: connection.mood.emoji,
+          text: connection.mood.text,
+          timestamp: connection.mood.timestamp
+        } : 'No mood set',
+        rawConnection: connection // Log the entire raw connection object
+      });
+    });
+    
+    // Directly fetch the latest mood data for each connection
+    const fetchMoodData = async () => {
+      if (!connections.length) return;
+      
+      try {
+        const db = getFirestore();
+        const updatedConnections = [...connections];
+        let moodDataChanged = false;
+        
+        for (let i = 0; i < connections.length; i++) {
+          const connection = connections[i];
+          const userRef = doc(db, 'users', connection.userId);
+          const userDoc = await getDoc(userRef);
+          
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            console.log(`DEBUG - Direct fetch for ${connection.displayName}:`, userData.mood);
+            
+            if (userData.mood && (!connection.mood || 
+                userData.mood.timestamp !== connection.mood.timestamp)) {
+              updatedConnections[i] = {
+                ...connection,
+                mood: userData.mood
+              };
+              moodDataChanged = true;
+              console.log(`DEBUG - Updated mood for ${connection.displayName}:`, userData.mood);
+            }
+          }
+        }
+        
+        if (moodDataChanged) {
+          console.log("DEBUG - Connections updated with fresh mood data:", updatedConnections);
+          setConnections(updatedConnections);
+        }
+      } catch (error) {
+        console.error("Error fetching mood data:", error);
+      }
+    };
+    
+    fetchMoodData();
+  }, [connections]);
+  
   return (
     <div className="relative w-full h-full">
       {/* Map container */}
       <div ref={mapContainerRef} className="w-full h-full absolute inset-0" />
+      
+      {/* Connection Info Modal */}
+      {selectedConnectionInfo && (
+        <div className="connection-modal">
+          <div className="modal-content">
+            <button className="close-button" onClick={() => setSelectedConnectionInfo(null)}>×</button>
+            <h3>{selectedConnectionInfo.displayName}</h3>
+            
+            <div className="mood-container">
+              <p className="mood-title">Mood:</p>
+              
+              {selectedConnectionInfo.freshMood ? (
+                <div className="fresh-mood">
+                  <p className="mood-emoji">{selectedConnectionInfo.freshMood.emoji}</p>
+                  <p className="mood-text">{selectedConnectionInfo.freshMood.text}</p>
+                  <p className="mood-time">
+                    {new Date(selectedConnectionInfo.freshMood.timestamp).toLocaleString()}
+                  </p>
+                </div>
+              ) : (
+                <p className="mood-status">{selectedConnectionInfo.formattedMood}</p>
+              )}
+            </div>
+            
+            <p className="last-active">
+              Last active: {selectedConnectionInfo.location ? new Date(selectedConnectionInfo.location.timestamp).toLocaleString() : 'Unknown'}
+            </p>
+          </div>
+        </div>
+      )}
       
       {/* Loading indicator */}
       {isMapLoading && (
@@ -1094,7 +1298,7 @@ export function Map({
               <h2 className="font-bold text-lg">
                 {messageTargetId || selectedConnectionId 
                   ? `Send Message to ${connections.find(c => c.id === (messageTargetId || selectedConnectionId))?.displayName || 'Connection'}`
-                  : 'Share a Message'}
+                  : 'Share Your Status Message'}
               </h2>
               <button 
                 onClick={() => setMessageModalOpen(false)}
@@ -1111,7 +1315,7 @@ export function Map({
                   <p className="text-sm text-gray-600 mb-2">
                     {messageTargetId || selectedConnectionId 
                       ? `This message will be visible only to ${connections.find(c => c.id === (messageTargetId || selectedConnectionId))?.displayName}.`
-                      : 'This message will appear above your location on the map.'}
+                      : 'This message will appear above your location on the map for all your connections to see.'}
                   </p>
                   <textarea
                     value={message}
@@ -1149,7 +1353,7 @@ export function Map({
                 )}
                 
                 <div className="flex justify-end space-x-2 pt-2">
-        <button
+                  <button
                     onClick={() => {
                       setMessageModalOpen(false);
                       setMessageTargetId(null);
@@ -1220,26 +1424,236 @@ export function Map({
           color: white;
         }
         
+        .mood-popup {
+          position: absolute !important;  /* Force absolute positioning */
+          transform: none !important;     /* Prevent transformations */
+          left: auto !important;          /* Reset left position */
+          max-width: 250px !important;    /* Control max width */
+          z-index: 2000 !important;       /* Ensure high z-index */
+        }
+        
         .mood-popup .leaflet-popup-content-wrapper {
           background: white;
           color: black;
-          border-radius: 20px;
+          border-radius: 15px;
           padding: 0;
-          box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+          box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+          border: 2px solid #3b82f6;
+          overflow-x: hidden;
+          max-height: 80vh;
+          overflow-y: auto;
+          width: auto !important;
+          max-width: 240px !important;
         }
         
         .mood-popup .leaflet-popup-content {
-          margin: 8px 8px;
-          line-height: 1.4;
+          margin: 0;
+          line-height: 1.3;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          padding: 0;
+          width: auto !important;
+        }
+        
+        .mood-popup .leaflet-popup-tip-container {
+          left: 50%;
+          margin-left: -10px;
+          position: absolute;
+          width: 20px;
+          height: 20px;
+          bottom: -20px;
         }
         
         .mood-popup .leaflet-popup-tip {
           background: white;
+          border: 2px solid #3b82f6;
+          box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+          width: 15px;
+          height: 15px;
+        }
+        
+        .mood-popup .leaflet-popup-close-button {
+          color: #0284c7;
+          font-size: 16px;
+          padding: 4px;
+          font-weight: bold;
+          top: 3px;
+          right: 3px;
+        }
+        
+        .mood-popup .leaflet-popup-close-button:hover {
+          color: #0369a1;
+          background: none;
+          text-decoration: none;
+        }
+        
+        /* Animation for popup appearance - keep it simple */
+        .leaflet-popup {
+          opacity: 0;
+          animation: simplePopupFadeIn 0.2s forwards;
+        }
+        
+        @keyframes simplePopupFadeIn {
+          to {
+            opacity: 1;
+          }
         }
         
         .message-bubble {
           max-width: 200px;
           word-wrap: break-word;
+        }
+        
+        .mood-popup-fixed {
+          z-index: 9999 !important;
+        }
+        
+        .mood-popup-fixed .leaflet-popup-content-wrapper {
+          background: white;
+          color: black;
+          border-radius: 12px;
+          padding: 0;
+          box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+          border: 3px solid #3b82f6;
+          max-width: 250px;
+        }
+        
+        .mood-popup-fixed .leaflet-popup-content {
+          margin: 0;
+          padding: 0;
+          width: 100% !important;
+          max-width: 100% !important;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        .mood-popup-fixed .leaflet-popup-tip {
+          background: white;
+          border: 2px solid #3b82f6;
+          box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+        }
+        
+        .mood-popup-fixed .leaflet-popup-close-button {
+          color: #000;
+          font-size: 20px;
+          font-weight: bold;
+          padding: 5px;
+          right: 5px;
+          top: 5px;
+        }
+        
+        .mood-popup-fixed .leaflet-popup-close-button:hover {
+          color: #3b82f6;
+          background: none;
+        }
+        
+        /* Add this CSS right after the map container styles */
+        .connection-modal {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0, 0, 0, 0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+        }
+        
+        .modal-content {
+          background-color: white;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+          padding: 20px;
+          width: 280px;
+          max-width: 90vw;
+          position: relative;
+          animation: fadeIn 0.3s ease;
+        }
+        
+        .close-button {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: none;
+          border: none;
+          font-size: 24px;
+          cursor: pointer;
+          color: #666;
+          width: 30px;
+          height: 30px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: color 0.2s;
+        }
+        
+        .close-button:hover {
+          color: #000;
+        }
+        
+        .modal-content h3 {
+          text-align: center;
+          margin-bottom: 15px;
+          font-size: 20px;
+          font-weight: bold;
+        }
+        
+        .mood-container {
+          text-align: center;
+          margin-bottom: 20px;
+        }
+        
+        .mood-title {
+          font-weight: bold;
+          margin-bottom: 5px;
+          color: #666;
+        }
+        
+        .mood-status {
+          font-size: 16px;
+        }
+        
+        .last-active {
+          text-align: center;
+          font-size: 14px;
+          color: #666;
+          border-top: 1px solid #eee;
+          padding-top: 10px;
+          margin-top: 10px;
+        }
+        
+        .fresh-mood {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          animation: fadeIn 0.3s ease;
+        }
+        
+        .mood-emoji {
+          font-size: 32px;
+          margin-bottom: 5px;
+        }
+        
+        .mood-text {
+          font-size: 16px;
+          font-weight: 500;
+          margin-bottom: 5px;
+        }
+        
+        .mood-time {
+          font-size: 12px;
+          color: #666;
+        }
+        
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
       `}</style>
     </div>

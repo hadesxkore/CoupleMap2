@@ -536,6 +536,13 @@ export function LocationProvider({ children }: LocationProviderProps) {
                 
                 if (connectionDoc.exists()) {
                   const connectionData = connectionDoc.data();
+                  console.log(`DEBUG - Raw connection data for ${connection.id}:`, connectionData);
+                  
+                  // Check if mood data exists and log it
+                  if (connectionData.mood) {
+                    console.log(`DEBUG - Found mood for ${connection.displayName}:`, connectionData.mood);
+                  }
+                  
                   return {
                     id: connection.id,
                     userId: connection.id,
@@ -548,7 +555,13 @@ export function LocationProvider({ children }: LocationProviderProps) {
                       timestamp: connectionData.location.timestamp instanceof Timestamp 
                         ? connectionData.location.timestamp.toDate().toISOString()
                         : connectionData.location.timestamp
-                    } : null
+                    } : null,
+                    // Explicitly include mood data from the connection document
+                    mood: connectionData.mood ? {
+                      emoji: connectionData.mood.emoji,
+                      text: connectionData.mood.text,
+                      timestamp: connectionData.mood.timestamp
+                    } : undefined
                   };
                 }
                 
